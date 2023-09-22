@@ -1,0 +1,39 @@
+import requests
+from requests.auth import HTTPBasicAuth
+from google.cloud import bigquery
+
+# Set your Collibra username and password
+collibra_username = "your_username"
+collibra_password = "your_password"
+
+# Set the BigQuery table name and query
+bq_table_name = "my_project.my_dataset.my_table"
+bq_query = "SELECT * FROM `{}` WHERE updated_at >= TIMESTAMP('2023-09-21 22:56:53 PST')".format(bq_table_name)
+
+# Create a BigQuery client
+bq_client = bigquery.Client()
+
+# Query the BigQuery table
+bq_results = bq_client.query(bq_query).result()
+
+# Create a Collibra payload from the BigQuery results
+collibra_payload = []
+for row in bq_results:
+    collibra_payload.append(row)
+
+# Send the POST request to the Collibra API
+response = requests.post(
+    "https://developer.collibra.com/rest/2.0/attributes/bulk",
+    auth=HTTPBasicAuth(collibra_username, collibra_password),
+    headers={"Accept": "application/json", "Content-Type": "application/json"},
+    json=collibra_payload,
+)
+
+# Check the response status code
+if response.status_code == 200:
+    # Success!
+    print("Attributes created successfully!")
+else:
+    # An error occurred
+    print(f"Error: {response.status_code}")
+    print(response.content)
