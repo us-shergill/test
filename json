@@ -43,3 +43,39 @@ json_payload	JSON	NULLABLE
 asset_id	STRING	NULLABLE		
 last_modified_timestamp	TIMESTAMP	NULLABLE		
 ingested_timestamp	TIMESTAMP	NULLABLE
+
+
+
+[
+
+  {
+
+    "assetId": "f9ea88c6-eedf-459d-9148-7bd3ade7cf11",
+
+    "typeId": "cdfb9d34-afd7-4192-a4f0-b6f8dcb99899",
+
+    "value": "Yes (0)"
+
+  },
+
+  {
+
+    "assetId": "f9ea88c6-eedf-459d-9148-7bd3ade7cf11",
+
+    "typeId": "a3382f1c-8559-446e-8791-3dbf8b96ddbf",
+
+    "value": "No (1)"
+
+  },
+
+  {
+
+    "assetId": "c2d58829-73c7-4959-a8f9-44ad6ea9c637",
+
+    "typeId": "a3382f1c-8559-446e-8791-3dbf8b96ddbf",
+
+    "value": "No (1)"
+
+  }
+
+]
