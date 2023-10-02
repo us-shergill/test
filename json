@@ -1,0 +1,45 @@
+{
+    "articulation_score": 5,
+    "asset_display_name": "num_d3_component_today_d3audit",
+    "asset_name": "gbq-prj-d-data-platform-4922>prj-d-data-platform-4922>fract_dataprep>d3audit_processed_23SEP22_V1>num_d3_component_today_d3audit(column)",
+    "assettype": {
+        "asset_type_id": "00000000-0000-0000-0000-000000031008",
+        "asset_type_name": "Column",
+        "description": "An atomic unit of data that can be stored in a database table.\n\nExamples: FST_NM, EMPID",
+    },
+    "average_rating": 0,
+    "char_octet_length": 0,
+    "column_position": 10,
+    "created_by": "00000000-0000-0000-0000-000000900001",
+    "created_on": 1684360605058,
+    "domain": {
+        "domain_id": "c6d551de-b334-4519-bb28-a42bf38829d1",
+        "domain_name": "gbq-prj-d-data-platform-4922 > prj-d-data-platform-4922 > fract_dataprep",
+    },
+    "is_auto_incremented": true,
+    "is_generated": true,
+    "is_nullable": true,
+    "is_pii": false,
+    "is_primary_key": true,
+    "last_modified": 1684360624772,
+    "last_modified_by": "00000000-0000-0000-0000-000000900001",
+    "number_of_fractional_digits": 0,
+    "original_name": "num_d3_component_today_d3audit",
+    "ratings_count": 0,
+    "size": 15,
+    "status": {
+        "status_description": "The initial status of an asset.\n",
+        "status_id": "00000000-0000-0000-0000-000000005008",
+        "status_name": "Candidate",
+    },
+    "system": false,
+    "technical_data_type": "FLOAT",
+}
+
+
+
+
+json_payload	JSON	NULLABLE		
+asset_id	STRING	NULLABLE		
+last_modified_timestamp	TIMESTAMP	NULLABLE		
+ingested_timestamp	TIMESTAMP	NULLABLE
