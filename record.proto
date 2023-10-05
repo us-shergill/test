@@ -1,0 +1,13 @@
+syntax = "proto2";
+// import "google/protobuf/timestamp.proto";
+
+// Define a message type representing the rows in your table. The message
+// cannot contain fields which are not present in the table.
+message Record {
+
+  optional string json_payload = 1;
+  optional string asset_id = 2;
+  // Use the required keyword for client-side validation of required fields.
+  optional int64 last_modified_timestamp = 3;
+  optional int64 ingested_timestamp = 4;
+}

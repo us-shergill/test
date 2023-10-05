@@ -1,0 +1,129 @@
+{
+    "ViewConfig": {
+        "displayStart": {{ params.start_index }},
+        "displayLength": {{ params.number_of_records}},
+        "Resources": {
+            "Asset": {
+                "Id": {
+                    "name": "asset_id"
+                },
+                "createdBy": {
+                    "name": "created_by"
+                },
+                "createdOn": {
+                    "name": "created_on"
+                },
+                "lastModifiedBy": {
+                    "name": "last_modified_by"
+                },
+                "lastModified": {
+                    "name": "last_modified"
+                },
+                "system": {
+                    "name": "system"
+                },
+                "signifier": {
+                    "name": "asset_name"
+                },
+                "displayName": {
+                    "name": "asset_display_name"
+                },
+                "Status": {
+                    "name": "status",
+                    "id": {
+                        "name": "status_id"
+                    },
+                    "signifier": {
+                        "name": "status_name"
+                    },
+                    "description": {
+                        "name": "status_description", "stripHtml":true
+                    }
+                },
+                "Domain": {
+                    "name": "domain",
+                    "id": {
+                        "name": "domain_id"
+                    },
+                    "Name": {
+                        "name": "domain_name"
+                    }
+                },
+                "AssetType": {
+                    "name": "asset_type",
+                    "id": {
+                        "name": "asset_type_id"
+                    },
+                    "signifier": {
+                        "name": "asset_type_name"
+                    },
+                    "description": {
+                        "name": "description"
+                    },
+                    "attributeKind": {
+                        "name": "attribute_kind"
+                    }
+                },
+                "articulationScore": {
+                    "name": "articulation_score"
+                },
+                "avgRating": {
+                    "name": "average_rating"
+                },
+                "ratingsCount": {
+                    "name": "ratings_count"
+                },
+                "Attribute": {
+                    "name":"attribute",
+                    "class":{"name":"class"},
+                    "value":{
+                        "name": "attribute_value", "stripHtml":true
+                    }, 
+                    "AttributeType": {
+                        "name":"attribute_type", 
+                        "signifier":{"name":"attribute_type_name"}
+                    }
+                },
+                "Filter": {
+                    "AND": [
+                        {
+                            "Field": {
+                                "name": "asset_type_name",
+                                "operator": "IN",
+                                "values": ["Column", "Table", "Database View", "Data Set"]
+                            }
+                        },
+                        {
+                            "Field": {
+                                "name": "asset_display_name",
+                                "operator": "NOT_NULL"
+                            }
+                        },
+                        {
+                            "Field": {
+                                "name": "last_modified",
+                                "operator": "GREATER",
+                                "value": {{ params.start_datetime_epoch }}
+                            }
+                        },
+                        {
+                            "Field": {
+                                "name": "last_modified",
+                                "operator": "LESS",
+                                "value": {{ params.end_datetime_epoch }}
+                            }
+                        }
+                    ]
+                },
+                "Order": [
+                    {
+                        "Field": {
+                            "name": "last_modified",
+                            "order": "ASC"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
