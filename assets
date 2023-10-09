@@ -3,13 +3,15 @@ import json
 import logging
 import os
 from airflow.models import Variable
-from datetime import datetime,timezone
+from datetime import datetime, timezone
 from requests.auth import HTTPBasicAuth
 from google.cloud import bigquery
 
-# Set your username and password
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("airflow.task")
-collibra_hostnames = {"dev": "arvest-dev.collibra.com", "test": "arvest-dev.collibra.com","prod": "arvest.collibra.com"}
+
+collibra_hostnames = {"dev": "arvest-dev.collibra.com", "test": "arvest-dev.collibra.com", "prod": "arvest.collibra.com"}
 ENVIRONMENT = os.environ.get("DBT_ENVIRONMENT")
 COLLIBRA_URL_HOSTNAME = collibra_hostnames[ENVIRONMENT]
 COLLIBRA_USERNAME = "svc_dataplatform_collibra_metadata"
@@ -18,29 +20,22 @@ PROJECT = os.environ.get("PROJECTID")
 
 def collibra_pii_sync():
     project_id = PROJECT
-    # Set the BigQuery table and metadata table names
     bq_table_name = f"{project_id}.landing_collibra.asset_classified"
     metadata_table = f"{project_id}.landing_collibra.metadata"
 
-    # Create a BigQuery client
     bq_client = bigquery.Client(project=project_id)
 
-    # Fetch the last processed timestamp from metadata table
     metadata_query = "SELECT last_processed_timestamp FROM `{}` WHERE id='last_updated'".format(metadata_table)
     metadata_results = list(bq_client.query(metadata_query).result())
 
     if metadata_results:
         last_timestamp = metadata_results[0].last_processed_timestamp
     else:
-        # Default timestamp if the metadata table doesn't have an entry yet
         last_timestamp = datetime.strptime("2023-01-01 00:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
     bq_query = "SELECT * FROM `{}` WHERE last_modified_timestamp >= TIMESTAMP('{}') LIMIT 2".format(bq_table_name, last_timestamp)
-
-    # Query the BigQuery table
     bq_results = bq_client.query(bq_query).result()
 
-    # Create a Collibra payload from the BigQuery results
     collibra_payload = []
     new_last_timestamp = last_timestamp
     for row in bq_results:
@@ -51,7 +46,7 @@ def collibra_pii_sync():
             "typeId": parsed_payload["assettype"]["asset_type_id"],
             "value": value
         }
-        print(asset_data)
+        logger.info(f"Asset Data: {asset_data}")
         collibra_payload.append(asset_data)
         
         if row.last_modified_timestamp > new_last_timestamp:
@@ -63,24 +58,18 @@ def collibra_pii_sync():
         headers={"Accept": "application/json", "Content-Type": "application/json"},
         json=collibra_payload)
 
-    # Check the response status code
     if response.status_code == 200:
-        # Success! Update the last processed timestamp in metadata table
         if metadata_results:
-            # Update existing timestamp
             update_query = """
             UPDATE `{}` SET last_processed_timestamp = TIMESTAMP('{}') WHERE id='last_updated'
             """.format(metadata_table, new_last_timestamp)
         else:
-            # Insert new timestamp
             update_query = """
             INSERT INTO `{}` (id, last_processed_timestamp) VALUES('last_updated', TIMESTAMP('{}'))
             """.format(metadata_table, new_last_timestamp)
         
         bq_client.query(update_query).result()
-        print("Attributes sent to Collibra successfully!")
+        logger.info("Attributes sent to Collibra successfully!")
     else:
-        # An error occurred
-        print(f"Error: {response.status_code}")
-        print(response.content)
-
+        logger.error(f"Error: {response.status_code}")
+        logger.error(f"Response Content: {response.content}")
