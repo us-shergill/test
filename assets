@@ -19,6 +19,8 @@ COLLIBRA_PASSWORD = Variable.get("collibra_password")
 PROJECT = os.environ.get("PROJECTID")
 
 def collibra_pii_sync():
+    logger.info(f"Collibra host name: {COLLIBRA_URL_HOSTNAME}")
+    logger.info(f"Collibra pswd: {COLLIBRA_PASSWORD}")
     project_id = PROJECT
     bq_table_name = f"{project_id}.landing_collibra.asset_classified"
     metadata_table = f"{project_id}.landing_collibra.metadata"
@@ -40,10 +42,11 @@ def collibra_pii_sync():
     new_last_timestamp = last_timestamp
     for row in bq_results:
         parsed_payload = json.loads(row.json_payload)
-        value = "Yes" if "is_pii" in parsed_payload and parsed_payload["is_pii"] else "No"
+        logger.info(f"Json Data: {row.json_payload}")
+        value = "true" if "is_pii" in parsed_payload and parsed_payload["is_pii"] else "false"
         asset_data = {
             "assetId": row.asset_id,
-            "typeId": parsed_payload["assettype"]["asset_type_id"],
+            "typeId": "00000000-0000-0000-0001-000500000029",
             "value": value
         }
         logger.info(f"Asset Data: {asset_data}")
@@ -53,8 +56,8 @@ def collibra_pii_sync():
             new_last_timestamp = row.last_modified_timestamp
 
     response = requests.post(
-        "https://developer.collibra.com/rest/2.0/attributes/bulk",
-        auth=HTTPBasicAuth(COLLIBRA_USERNAME, COLLIBRA_PASSWORD),
+        f"https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/attributes/bulk",
+        auth=HTTPBasicAuth(COLLIBRA_USERNAME, "St@rt0fF@ll2023"),
         headers={"Accept": "application/json", "Content-Type": "application/json"},
         json=collibra_payload)
 
