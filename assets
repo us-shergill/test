@@ -55,11 +55,32 @@ def collibra_pii_sync():
         if row.last_modified_timestamp > new_last_timestamp:
             new_last_timestamp = row.last_modified_timestamp
 
-    response = requests.post(
+    # Retrieve PII attributes using Collibra Get Attributes API
+    pii_attribute_ids = []
+    for asset_data in collibra_payload:
+        asset_id = asset_data["assetId"]
+        response = requests.get(
+            f"https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/assets/{asset_id}/attributes",
+            auth=HTTPBasicAuth(COLLIBRA_USERNAME, COLLIBRA_PASSWORD),
+            headers={"Accept": "application/json"}
+        )
+        if response.status_code == 200:
+            attributes = response.json()
+            for attribute in attributes:
+                if attribute.get("typeId") == "PII_ATTRIBUTE_TYPE_ID":
+                    pii_attribute_ids.append(attribute["id"])
+        else:
+            logger.error(f"Error fetching attributes for asset {asset_id}: {response.status_code}")
+            logger.error(f"Response Content: {response.content}")
+
+    # Patch PII attributes using Collibra Patch Attributes API
+    patch_payload = [{"id": attr_id, "value": {}} for attr_id in pii_attribute_ids]
+    response = requests.patch(
         f"https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/attributes/bulk",
-        auth=HTTPBasicAuth(COLLIBRA_USERNAME, "St@rt0fF@ll2023"),
+        auth=HTTPBasicAuth(COLLIBRA_USERNAME, COLLIBRA_PASSWORD),
         headers={"Accept": "application/json", "Content-Type": "application/json"},
-        json=collibra_payload)
+        json=patch_payload
+    )
 
     if response.status_code == 200:
         if metadata_results:
@@ -74,5 +95,5 @@ def collibra_pii_sync():
         bq_client.query(update_query).result()
         logger.info("Attributes sent to Collibra successfully!")
     else:
-        logger.error(f"Error: {response.status_code}")
+        logger.error(f"Error patching attributes: {response.status_code}")
         logger.error(f"Response Content: {response.content}")
