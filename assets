@@ -46,7 +46,6 @@ def collibra_pii_sync():
         value = "true" if "is_pii" in parsed_payload and parsed_payload["is_pii"] else "false"
         asset_data = {
             "assetId": row.asset_id,
-            "typeId": "00000000-0000-0000-0001-000500000029",
             "value": value
         }
         logger.info(f"Asset Data: {asset_data}")
@@ -57,18 +56,19 @@ def collibra_pii_sync():
 
     # Retrieve PII attributes using Collibra Get Attributes API
     pii_attribute_ids = []
+    https://arvest.collibra.com/rest/2.0/attributes?offset=0&limit=0&countLimit=-1&typeIds=00000000-0000-0000-0001-000500000029&assetId=5ef81b60-d273-4cd0-93a4-248fc054bf05&sortOrder=DESC&sortField=ID
     for asset_data in collibra_payload:
         asset_id = asset_data["assetId"]
         response = requests.get(
-            f"https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/assets/{asset_id}/attributes",
-            auth=HTTPBasicAuth(COLLIBRA_USERNAME, COLLIBRA_PASSWORD),
+            f"""https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/attributes?offset=0&limit=0&typeIds=00000000-0000-0000-0001-000500000029
+            &assetId={asset_data["assetId"]}&sortOrder=DESC&sortField=id""",
+            auth=HTTPBasicAuth(COLLIBRA_USERNAME, "St@rt0fF@ll2023"),
             headers={"Accept": "application/json"}
         )
         if response.status_code == 200:
             attributes = response.json()
             for attribute in attributes:
-                if attribute.get("typeId") == "PII_ATTRIBUTE_TYPE_ID":
-                    pii_attribute_ids.append(attribute["id"])
+                pii_attribute_ids.append(attribute["id"])
         else:
             logger.error(f"Error fetching attributes for asset {asset_id}: {response.status_code}")
             logger.error(f"Response Content: {response.content}")
@@ -77,7 +77,7 @@ def collibra_pii_sync():
     patch_payload = [{"id": attr_id, "value": {}} for attr_id in pii_attribute_ids]
     response = requests.patch(
         f"https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/attributes/bulk",
-        auth=HTTPBasicAuth(COLLIBRA_USERNAME, COLLIBRA_PASSWORD),
+        auth=HTTPBasicAuth(COLLIBRA_USERNAME, "St@rt0fF@ll2023"),
         headers={"Accept": "application/json", "Content-Type": "application/json"},
         json=patch_payload
     )
