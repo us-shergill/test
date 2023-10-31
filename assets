@@ -1,6 +1,7 @@
 import requests
 import json
 import logging
+import urllib.parse
 import os
 from airflow.models import Variable
 from datetime import datetime, timezone
@@ -17,23 +18,6 @@ COLLIBRA_URL_HOSTNAME = collibra_hostnames[ENVIRONMENT]
 COLLIBRA_USERNAME = "svc_dataplatform_collibra_metadata"
 COLLIBRA_PASSWORD = Variable.get("collibra_password")
 PROJECT = os.environ.get("PROJECTID")
-
-def pretty_print(req):
-    """
-    At this point it is completely built and ready
-    to be fired; it is "prepared".
-
-    However pay attention at the formatting used in 
-    this function because it is programmed to be pretty 
-    printed and may differ from the actual request.
-    """
-    print('{}\n{}\r\n{}\r\n\r\n{}'.format(
-        '-----------START-----------',
-        req.method + ' ' + req.url,
-        '\r\n'.join('{}: {}'.format(k, v) for k, v in req.headers.items()),
-        req.body,
-    ))
-
 
 def collibra_pii_sync():
     logger.info(f"Collibra host name: {COLLIBRA_URL_HOSTNAME}")
@@ -75,21 +59,21 @@ def collibra_pii_sync():
     pii_attribute_ids = []
     typeIds = ['00000000-0000-0000-0001-000500000029']
     typeIdsArray = ",".join(typeIds)
-    params = {"assetId":{asset_data["assetId"]},"typeIds":typeIdsArray,
-              "offset":0, "limit":0, "sortOrder":"DESC", "sortField":"ID"}
     for asset_data in collibra_payload:
         asset_id = asset_data["assetId"]
         attributes_url = f"""https://{COLLIBRA_URL_HOSTNAME}/rest/2.0/attributes"""
-        query_data = f"offset=0&limit=0&countLimit=-1&assetId={asset_id}&typeIds=00000000-0000-0000-0001-000500000029&sortOrder=DESC&sortField=LAST_MODIFIED"
-        req = requests.Request('GET', attributes_url, headers={"Accept": "application/json"}, data=query_data, auth=HTTPBasicAuth(COLLIBRA_USERNAME, "St@rt0fF@ll2023"))
-        prepared = req.prepare()
-        pretty_print(prepared)
-        s = requests.Session()
-        response = s.send(prepared)
+        logger.info(f"Url: {attributes_url}")
+        params = {"assetId":{asset_data["assetId"]},"typeIds[]":typeIdsArray,
+              "offset":0, "limit":0, "sortOrder":"DESC", "sortField":"LAST_MODIFIED"}
+        response = requests.get(attributes_url, params=params,
+            auth=HTTPBasicAuth(COLLIBRA_USERNAME, "St@rt0fF@ll2023"),
+            headers={"Accept": "application/json"}
+        )
+        logger.info(f"Resulting Url: {response.url}")
         if response.status_code == 200:
             attributes = response.json()
-            logger.info(f"attributes: {attributes}")
-            for attribute in attributes:
+            for attribute in attributes["results"]:
+                logger.info(f"attributes: {attribute['id']}")
                 pii_attribute_ids.append(attribute["id"])
         else:
             logger.error(f"Error fetching attributes for asset {asset_id}: {response.status_code}")
