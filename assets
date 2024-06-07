@@ -1,1 +1,94 @@
+{
+  "aws_attributes.first_on_demand": {
+    "type": "fixed",
+    "value": 1,
+    "hidden": true
+  },
+  "aws_attributes.availability": {
+    "type": "fixed",
+    "value": "SPOT_WITH_FALLBACK",
+    "hidden": true
+  },
+  "aws_attributes.spot_bid_price_percent": {
+    "type": "fixed",
+    "value": 100,
+    "hidden": true
+  },
+  "aws_attributes.ebs_volume_count": {
+    "type": "fixed",
+    "value": 0,
+    "hidden": true
+  },
+  "aws_attributes.zone_id": {
+    "type": "unlimited",
+    "defaultValue": "auto",
+    "hidden": true
+  },
+  "node_type_id": {
+    "type": "allowlist",
+    "values": [
+      "i4i.large"
+    ],
+    "defaultValue": "i4i.large"
+  },
+  "spark_version": {
+    "type": "fixed",
+    "value": "14.3.x-scala2.12"
+  },
+  "runtime_engine": {
+    "type": "fixed",
+    "value": "PHOTON",
+    "hidden": true
+  },
+  "num_workers": {
+    "type": "fixed",
+    "value": 0,
+    "hidden": true
+  },
+  "data_security_mode": {
+    "type": "allowlist",
+    "values": [
+      "SINGLE_USER"
+    ],
+    "defaultValue": "SINGLE_USER",
+    "hidden": true
+  },
+  "driver_instance_pool_id": {
+    "type": "forbidden",
+    "hidden": true
+  },
+  "cluster_type": {
+    "type": "fixed",
+    "value": "job"
+  },
+  "instance_pool_id": {
+    "type": "forbidden",
+    "hidden": true
+  },
+  "spark_conf.spark.master": {
+    "type": "fixed",
+    "value": "local[*, 4]",
+    "hidden": true
+  },
+  "spark_conf.spark.databricks.cluster.profile": {
+    "type": "fixed",
+    "value": "singleNode",
+    "hidden": true
+  },
+  "enable_elastic_disk": {
+    "type": "fixed",
+    "value": true,
+    "hidden": true
+  },
+  "custom_tags.Domain": {
+    "type": "fixed",
+    "value": "MAA_CLM_FIN-MAA_BUSINESS_MART"
+  },
+  "custom_tags.DBTPolicy": {
+    "type": "fixed",
+    "value": "true"
+  }
+}
 
+
+https://registry.terraform.io/providers/databricks/databricks/latest/docs/resources/cluster_policy
