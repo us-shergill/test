@@ -1,37 +1,33 @@
-Got it. I'll adjust the mappings accordingly and focus on product mapping conventions. Here are the transformed names for the 20 CDO objects and 10 SV objects:
+Here are the transformed names for the 20 CDO objects and 10 SV objects:
 
-### CDO Objects
-1. **cdoAdmissionSourceDim** -> `clm_admsn_src_dim`
-2. **cdoAdmissionTypeDim** -> `clm_admsn_ty_dim`
-3. **cdoAuthorizationFact** -> `auth_fct`
-4. **cdoAuthorizationICDDiagnosisCode** -> `auth_icd_diag_cd`
-5. **cdoAuthorizationICDProcedureCode** -> `auth_icd_proc_cd`
-6. **cdoAuthorizationServiceFact** -> `auth_svc_fct`
-7. **cdoAuthorizationStatusFact** -> `auth_stat_fct`
-8. **cdoBusinessSector** -> `sctr`
-9. **cdoCCSRDiagnosisCode** -> `ccsr_diag_cd`
-10. **cdoClaimAmbulanceInformation** -> `clm_amblc_info`
-11. **cdoClaimBucketDim** -> `clm_bkt_dim`
-12. **cdoClaimCondition** -> `clm_condn`
-13. **cdoClaimDiagnosisCode** -> `clm_diag_cd`
-14. **cdoClaimFormTypeCodeDim** -> `clm_form_ty_cd_dim`
-15. **cdoClaimICDProcedureCode** -> `clm_icd_proc_cd`
-16. **cdoClaimLineDiagnosisCode** -> `clm_ln_diag_cd`
-17. **cdoClaimStatusCodeDim** -> `clm_stat_cd_dim`
-18. **cdoClinicalAuthorization** -> `clncl_auth`
-19. **cdoClinicalGrievance** -> `clncl_grv`
-20. **cdoClinicalProgramReferralEnrollmentIncremental** -> `clncl_prog_refrl_enr_incrmtl`
+cdoAdmissionSourceDim -> clm_admsn_src_dim  
+cdoAdmissionTypeDim -> clm_admsn_ty_dim  
+cdoAuthorizationFact -> auth_fct  
+cdoAuthorizationICDDiagnosisCode -> auth_icd_diag_cd  
+cdoAuthorizationICDProcedureCode -> auth_icd_proc_cd  
+cdoAuthorizationServiceFact -> auth_svc_fct  
+cdoAuthorizationStatusFact -> auth_stat_fct  
+cdoBusinessSector -> sctr  
+cdoCCSRDiagnosisCode -> ccsr_diag_cd  
+cdoClaimAmbulanceInformation -> clm_amblc_info  
+cdoClaimBucketDim -> clm_bkt_dim  
+cdoClaimCondition -> clm_condn  
+cdoClaimDiagnosisCode -> clm_diag_cd  
+cdoClaimFormTypeCodeDim -> clm_form_ty_cd_dim  
+cdoClaimICDProcedureCode -> clm_icd_proc_cd  
+cdoClaimLineDiagnosisCode -> clm_ln_diag_cd  
+cdoClaimStatusCodeDim -> clm_stat_cd_dim  
+cdoClinicalAuthorization -> clncl_auth  
+cdoClinicalGrievance -> clncl_grv  
+cdoClinicalProgramReferralEnrollmentIncremental -> clncl_prog_refrl_enr_incrmtl
 
-### SV Objects
-1. **svAdjustmentGroupCodeDim** -> `adj_grp_cd_dim`
-2. **svAdjustmentReasonCodeDim** -> `adj_rsn_cd_dim`
-3. **svAdmissionSourceDim** -> `admsn_src_dim`
-4. **svAdmissionTypeDim** -> `admsn_ty_dim`
-5. **svAuthorizationFact** -> `auth_fct`
-6. **svAuthorizationIcdDiagnosisCodeDim** -> `auth_icd_diag_cd_dim`
-7. **svAuthorizationIcdProcedureCodeDim** -> `auth_icd_proc_cd_dim`
-8. **svAuthorizationMemoDim** -> `auth_memo_dim`
-9. **svAuthorizationServiceFact** -> `auth_svc_fct`
-10. **svAuthorizationStatusCodeDim** -> `auth_stat_cd_dim`
-
-These mappings now reflect the correct product mapping conventions as per your example.
+svAdjustmentGroupCodeDim -> adj_grp_cd_dim  
+svAdjustmentReasonCodeDim -> adj_rsn_cd_dim  
+svAdmissionSourceDim -> admsn_src_dim  
+svAdmissionTypeDim -> admsn_ty_dim  
+svAuthorizationFact -> auth_fct  
+svAuthorizationIcdDiagnosisCodeDim -> auth_icd_diag_cd_dim  
+svAuthorizationIcdProcedureCodeDim -> auth_icd_proc_cd_dim  
+svAuthorizationMemoDim -> auth_memo_dim  
+svAuthorizationServiceFact -> auth_svc_fct  
+svAuthorizationStatusCodeDim -> auth_stat_cd_dim
