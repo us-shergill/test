@@ -1,91 +1,263 @@
-resource "databricks_cluster_policy" "example" {
-  name = "example-policy"
+Task: Take 20 CDO objects and 10 SV objects from the Teradata OSS_PROVSIONING_V database in OSS and identify how that object would be renamed if the same object lived in the MAA Databricks Platform.
 
-  definition = jsonencode({
-    "aws_attributes.first_on_demand": {
-      "type": "fixed",
-      "value": 1,
-      "hidden": true
-    },
-    "aws_attributes.availability": {
-      "type": "fixed",
-      "value": "SPOT_WITH_FALLBACK",
-      "hidden": true
-    },
-    "aws_attributes.spot_bid_price_percent": {
-      "type": "fixed",
-      "value": 100,
-      "hidden": true
-    },
-    "aws_attributes.ebs_volume_count": {
-      "type": "fixed",
-      "value": 0,
-      "hidden": true
-    },
-    "aws_attributes.zone_id": {
-      "type": "unlimited",
-      "defaultValue": "auto",
-      "hidden": true
-    },
-    "node_type_id": {
-      "type": "allowlist",
-      "values": ["i4i.large"],
-      "defaultValue": "i4i.large"
-    },
-    "spark_version": {
-      "type": "fixed",
-      "value": "14.3.x-scala2.12"
-    },
-    "runtime_engine": {
-      "type": "fixed",
-      "value": "PHOTON",
-      "hidden": true
-    },
-    "num_workers": {
-      "type": "fixed",
-      "value": 0,
-      "hidden": true
-    },
-    "data_security_mode": {
-      "type": "allowlist",
-      "values": ["SINGLE_USER"],
-      "defaultValue": "SINGLE_USER",
-      "hidden": true
-    },
-    "driver_instance_pool_id": {
-      "type": "forbidden",
-      "hidden": true
-    },
-    "cluster_type": {
-      "type": "fixed",
-      "value": "job"
-    },
-    "instance_pool_id": {
-      "type": "forbidden",
-      "hidden": true
-    },
-    "spark_conf.spark.master": {
-      "type": "fixed",
-      "value": "local[*, 4]",
-      "hidden": true
-    },
-    "spark_conf.spark.databricks.cluster.profile": {
-      "type": "fixed",
-      "value": "singleNode",
-      "hidden": true
-    },
-    "enable_elastic_disk": {
-      "type": "fixed",
-      "value": true,
-      "hidden": true
-    },
-    "custom_tags.Domain": {
-      "type": "fixed",
-      "value": "MAA_CLM_FIN-MAA_BUSINESS_MART"
-    },
-    "custom_tags.DBTPolicy": {
-      "type": "fixed",
-      "value": "true"
-    }
-  })
-}
+Examples:
+cdoHealthPlanCountySVC -> prdct_hlthpln_cnty_svc
+svClaimEditDim -> clm_edit_dim
+
+OSS (Teradata) Connections strings:
+DEV/QA/INT/UAT -> AWSTDPVS.SYS.CIGNA.COM
+PROD -> AWSTDPRD1.SYS.CIGNA.COM
+
+
+cdoAdmissionSourceDim                          |
+cdoAdmissionTypeDim                            |
+cdoAuthorizationFact                           |
+cdoAuthorizationICDDiagnosisCode               |
+cdoAuthorizationICDProcedureCode               |
+cdoAuthorizationServiceFact                    |
+cdoAuthorizationStatusFact                     |
+cdoBusinessSector                              |
+cdoCCSRDiagnosisCode                           |
+cdoClaimAmbulanceInformation                   |
+cdoClaimBucketDim                              |
+cdoClaimCondition                              |
+cdoClaimDiagnosisCode                          |
+cdoClaimFormTypeCodeDim                        |
+cdoClaimICDProcedureCode                       |
+cdoClaimLineDiagnosisCode                      |
+cdoClaimStatusCodeDim                          |
+cdoClinicalAuthorization                       |
+cdoClinicalGrievance                           |
+cdoClinicalProgramReferralEnrollmentIncremental|
+cdoDrugGcn                                     |
+cdoDrugGpi                                     |
+cdoEmployerGroup                               |
+cdoEncounterClaimDetail                        |
+cdoEncounterMedicalClaimDetail                 |
+cdoEncounterMedicalClaimDetailIncremental      |
+cdoFinancialBalancingAudit                     |
+cdoFinancialJournalEntry                       |
+cdoHealthPlan                                  |
+cdoHealthPlanBenefit                           |
+
+
+svAdjustmentGroupCodeDim                |
+svAdjustmentReasonCodeDim               |
+svAdmissionSourceDim                    |
+svAdmissionTypeDim                      |
+svAuthorizationFact                     |
+svAuthorizationIcdDiagnosisCodeDim      |
+svAuthorizationIcdProcedureCodeDim      |
+svAuthorizationMemoDim                  |
+svAuthorizationServiceFact              |
+svAuthorizationStatusCodeDim            |
+svAuthorizationStatusFact               |
+svAuthorizationTypeDim                  |
+svBedTypeDim                            |
+svBenefitInformationDim                 |
+svBillClassCodeDim                      |
+svBusinessSectorDim                     |
+svBusinessSectorDimension               |
+svClaimAdjustmentDim_DEPRECATED_07282023|
+svClaimAdjustmentGroupDim               |
+svClaimAdjustmentReasonDim              |
+
+Table Naming Conventions
+Below is the third draft of the MAA Databricks Platform naming conventions as of 05/30/2024. Please note that these standards and best practices are subject to change as requirements evolve based on stakeholder feedback.
+
+Data Being Replicated from OSS
+For data originally sourced from OSS, please follow the below naming conventions in lower case:
+
+<database_name_with_'_v'_removed>_<table_name>
+OSS Example for data originally sourced from BUSINESS_OPS_CORE_DEV2_V.EXT_SALES_CHANNEL_PROJ_MIX (DEV): business_ops_core_dev2_ext_sales_channel_proj_mix
+OSS Example for data originally sourced from REPORTING_INT_V.SDO_MILL_REPRC_CLM_MED (TEST): reporting_int_sdo_mill_reprc_clm_med
+OSS Example for data originally sourced from OSS_EXPORT_V.CDO_MED_CLM_DTL (PROD): oss_export_cdo_med_clm_dtl
+All Other Data
+For all other data, please follow the below naming conventions:
+
+For maa_{domain}_rawz and maa_{domain}_rawz_v, as well as maa_{domain}_cnfz and maa_{domain}_cnfz_v: <domain>_<entity>
+Examples:
+clm_med_dtl
+clm_phrm
+auth_admsn_hdr
+clncl_grv
+mbr_demg
+fncl_bal_aud
+For maa_{domain}_pubz and maa_{domain}_pubz_v: <domain>_<entity>_<time window>
+Examples:
+clm_enrlmt_monthly
+sales_agt_hier (no suffix for current data)
+prov_hier_history
+fncl_revnu_pharm_yearly
+fncl_revnu_med_quarterly
+mbr_condn (no suffix for current data)
+Backups and Snapshots: For all backups and snapshots, simply add the suffix "_bkp" for backups and "_snpsht" for snapshots, followed by the date of the backup/snapshot in yyyymmdd format (Example: fncl__cost_current_bkp_20240326)
+
+Delta Live Tables: When utilizing Delta live tables, simply add the "_dlt" suffix to your table names to denote it is part of a DLT Pipeline (Example: fncl_cost_current_dlt)
+
+DBT: When utilizing DBT for your workflow, please use the below prefixes based on your model stage:
+
+maa_{domain}_rawz / maa_{domain}_rawz_v → "stg_" (Example: stg_fncl_cost)
+maa_{domain}_cnfz / maa_{domain}_cnfz_v → "int_" (Example: int_fncl_cost)
+maa_{domain}_pubz / maa_{domain}_pubz_v → "mart_" / "dim_" / "fct_" / "agg_" (whichever makes more sense for your use case) (Example: mart_fncl_cost_daily)
+
+Examples of domains for table naming conventions
+Examples of entities for table naming conventions (can be combined for accuracy if needed)
+Examples of time windows for table naming conventions
+Audit Columns
+It is expected that the below Audit columns will be present in every Delta Table/View within the MAA Databricks Platform engineering schemas:
+dbrx_load_time:
+This column value will represent the last time a full refresh occurred on a particular record.
+For full-load jobs, this value will be the same as dbrx_update_time.
+Can use current_timestamp() function to resolve this column's value.
+dbrx_update_time:
+This column value will represent the last time an incremental refresh (aka UPDATE/MERGE) occurred on a particular record.
+For full-load jobs, this value will be the same as dbrx_load_time.
+Can use current_timestamp() function to resolve this column's value. 
+One or both of the below columns:
+source_data_name: Name of the data source where the data came from. Some examples could include below values:
+OSS
+<other data source outside of OSS (more examples TDB)>
+source_data_key: Key representing the original source of the data. Some examples of this include: 210, 40, 50 (representing GBS Facets, AZ, and QNXT data respectively)
+Data Movement
+Data Domain Schemas
+Before ingesting data into the MAA Databricks platform, you should be aware of which domain your data falls into. If you are unsure of which domain your data would fall under, reach out to your developer lead or delivery manager for clarity. Once you know which domain your data falls into, you will typically ingest your data through the schemas dedicated to that domain. The below table contains a list of all of the domain-level schemas that are currently provisioned for the MAA Databricks Platform:
+
+Authorization Schemas:
+
+maa_auth_rawz
+maa_auth_rawz_v
+maa_auth_cnfz
+maa_auth_cnfz_v
+maa_auth_pubz
+maa_auth_pubz_v
+Claims Schemas:
+
+maa_clm_rawz
+maa_clm_rawz_v
+maa_clm_cnfz
+maa_clm_cnfz_v
+maa_clm_pubz
+maa_clm_pubz_v
+Client Schemas:
+
+maa_clnt_rawz
+maa_clnt_rawz_v
+maa_clnt_cnfz
+maa_clnt_cnfz_v
+maa_clnt_pubz
+maa_clnt_pubz_v
+Clinical Schemas:
+
+maa_clncl_rawz
+maa_clncl_rawz_v
+maa_clncl_cnfz
+maa_clncl_cnfz_v
+maa_clncl_pubz
+maa_clncl_pubz_v
+Financial Schemas:
+
+maa_fncl_rawz
+maa_fncl_rawz_v
+maa_fncl_cnfz
+maa_fncl_cnfz_v
+maa_fncl_pubz
+maa_fncl_pubz_v
+Member Schemas:
+
+maa_mbr_rawz
+maa_mbr_rawz_v
+maa_mbr_cnfz
+maa_mbr_cnfz_v
+maa_mbr_pubz
+maa_mbr_pubz_v
+Product Schemas:
+
+maa_prdct_rawz
+maa_prdct_rawz_v
+maa_prdct_cnfz
+maa_prdct_cnfz_v
+maa_prdct_pubz
+maa_prdct_pubz_v
+Provider Schemas:
+
+maa_prov_rawz
+maa_prov_rawz_v
+maa_prov_cnfz
+maa_prov_cnfz_v
+maa_prov_pubz
+maa_prov_pubz_v
+Reference Schemas:
+
+maa_ref_rawz
+maa_ref_rawz_v
+maa_ref_cnfz
+maa_ref_cnfz_v
+maa_ref_pubz
+maa_ref_pubz_v
+Sales Schemas:
+
+maa_sales_rawz
+maa_sales_rawz_v
+maa_sales_cnfz
+maa_sales_cnfz_v
+maa_sales_pubz
+maa_sales_pubz_v
+For more information on how to ingest your data through the above domain-level schemas, please refer to the below Data Flow Guidelines.
+
+Data Flow Guidelines
+When onboarding onto the MAA Databricks Platform, it is expected that you will already have your raw file data in one of the raw layer buckets (maa-raw-external-data-{env}, maa-raw-internal-data-{env}). 
+Your data should then be ingested from the raw layer bucket into one of the raw layer schemas (maa_{domain}_rawz) as a table, with audit columns added only. No other data transformations should be done at this stage.
+If you not need to implement quality checks or conform your data any further, and/or wish to expose your data as-is to end-users, you should then create a view on top of your maa_{domain}_rawz table data in the accompanying maa_{domain}_rawz_v schema (raw zone view schema), simply as a SELECT * from your maa_{domain}_rawz table, or as a Dynamic View created on top of your maa_{domain}_rawz table if you need to restrict access to certain rows or column values based on user role.
+Note: In TEST and PROD, the maa_{domain}_rawz schemas will not be exposed for user read access, but the maa_{domain}_rawz_v schemas will be. That is why it is very important that you make sure to create a view in the accompanying maa_{domain}_rawz_v schema on top of your maa_{domain}_rawz table if you want users to be able to access it.
+Note: CORE layer data being replicated from OSS should be loaded as a table in a relevant maa_{domain}_rawz schema and then exposed as a view in a relevant maa_{domain}_rawz_v schema and does not need to be ingested further.
+If your data does not need quality checks or to be further conformed, then you are done! 
+If your data does need data quality checks or to be conformed further, your data should then be ingested from your maa_{domain}_rawz table into a relevant maa_{domain}_cnfz schema (conformed zone schema) as a table, with any desired data quality cleansing/conforming done. No other data transformations should be done at this stage.
+Make sure to use the same domain you used for your raw layer schema table.
+If you wish to expose your data to end-users, you should then create a view on top of your maa_{domain}_cnfz table data in the accompanying maa_{domain}_cnfz_v schema (conformed zone view schema), simply as a SELECT * from your maa_{domain}_cnfz table, or as a Dynamic View created on top of your maa_{domain}_cnfz table if you need to restrict access to certain rows or column values based on user role.
+Note: Similar to the raw zone, in TEST and PROD, the maa_{domain}_cnfz schemas will not be exposed for user read access, but the maa_{domain}_cnfz_v schemas will be. That is why it is very important that you make sure to create a view in the accompanying maa_{domain}_cnfz_v schema on top of your maa_{domain}_cnfz table if you want users to be able to access it.
+Note: DATAMART layer data being replicated from OSS should be loaded as a table in a relevant maa_{domain}_cnfz schema and then exposed as a view in a relevant maa_{domain}_cnfz_v schema. This data can be directly loaded into one of the conformed zone schemas directly from the maa-raw-internal-data-{env} bucket, and does not need to flow through a raw zone schema first.
+If your data does not need any further transformations, then you are done! 
+If your data does need additional transformations, then you may perform these transformations as needed, sourcing from the relevant maa_{domain}_cnfz_v schema and saving the output of your transformed data into a relevant maa_{domain}_pubz schema (published zone schema).
+Typically, you will choose the same domain for your published zone schemas as you did for your raw and conformed layer schemas. However, if you are joining data from other domain schemas, and the end product of these transformations results in a data object that is more relevant to another domain, use that other domain instead.
+And similar to the conformed layer, you should then create a view on top of your maa_{domain}_pubz table data in the accompanying maa_{domain}_pubz_v (published zone view schema) as a SELECT * from your maa_{domain}_pubz table, or as a Dynamic View created on top of your maa_{domain}_pubz table if you need to restrict access to certain rows or column values based on user role.
+Note: Similar to the raw zone and conformed zone, in TEST and PROD, the maa_{domain}_pubz schemas will not be exposed for user read access, but the maa_{domain}_pubz_v schemas will be.  That is why it is very important that you make sure to create a view in the accompanying maa_{domain}_pubz_v schema on top of your maa_{domain}_pubz table if you want users to be able to access it.
+Note: REPORTING and OSS_PROVISIONING layer data being replicated from OSS should be loaded as a table in a relevant maa_{domain}_pubz schema and then exposed as a view in the shared maa_{domain}_pubz_v schema. This data can be directly loaded into one of the published zone schemas directly from the maa-raw-internal-data-{env} bucket, and does not need to flow through a raw zone schema first.
+Rules of Thumb:
+If you are importing data into Databricks from S3, load it into a relevant maa_{domain}_rawz schema as a table with necessary audit columns.
+Always create views in relevant view schemas on top of your tables in relevant table schemas if you want users to be able to see it and query it.
+When loading data into the maa_{domain}_cnfz schema, always source from the accompanying table or view in the maa_{domain}_rawz or maa_{domain}_rawz_v schema.
+Always create tables in the designated table schemas, and not in the designated view schemas.
+Always create views in the designated view schemas, and not in the designated table schemas.
+If you need to create functions, please use the maa_functions schema.
+If you need to create volumes, please use the maa_volumes schema.
+Required Tags
+For proper costing and tracking purposes, we are enforcing the attachment of the below tags to any deployed Databricks Jobs. These tags are already integrated into the terraform-maa-curation-examples template repository, but action will be needed on the part of the development teams for one or more of these tags:
+Domain: The name of your project team's domain. Should automatically be passed in via the existing code in the terraform-maa-curation-examples template, so no action needed for the developer.
+Project: The name of the project being worked on. Will often mirror your GitHub project name. Should automatically be passed in via the existing code in the terraform-maa-curation-examples template, so no action needed for the developer.
+GitHubRepo: The link to the project's GitHub repository. Should automatically be passed in via the existing code in the terraform-maa-curation-examples template, so no action needed for the developer.
+UsesTDVJDBC: Denotes whether or not the process utilises JDBC to connect directly to TDV. Valid values for this tag are "YES" and "NO". Default value is "NO". If a project team has been cleared to access TDV via JDBC, and is actively doing so in their Databricks job, this value should be changed to "YES"
+ServiceNowSupportGroup: Service Now support group that will be supporting this project. Can be blank for DEV, but needs to have a valid value for TEST/PROD.
+Example: "D&AE - EDE Govt Sales Marketing & Growth"
+Databricks Secrets for Secrets/Sensitive Credentials Management
+For managing sensitive credentials or secrets, the MAA Databricks supports Databricks Secrets, rather than AWS Secrets Manager. Please check out the below code examples in the terraform-maa-curation-examples repository to see how you can implement Databricks Secrets for your own use case:
+Databricks Secrets TF file: terraform-maa-curation-examples/module/databricks/examples/databricks_secrets.tf at main · cigna/terraform-maa-curation-examples
+Databricks Secrets Job Example TF Code: terraform-maa-curation-examples/module/databricks/examples/maa_databricks_job_example_dbrx_secrets.tf at main · cigna/terraform-maa-curation-examples
+Databricks Secrets Example Notebook: terraform-maa-curation-examples/module/databricks/examples/artifacts/notebooks/maa_databricks_ntbk_task_example_dbrx_secrets.py at main · cigna/terraform-maa-curation-examples
+External Tables
+We recommend that you do not use external tables by default, and only create managed tables within the MAA Databricks Unity Catalog. However, if your use case requires that you create external tables, please keep the below information in mind:
+The two below external locations are the only locations you can create external tables in:
+"s3://maa-integrated-data-{env}/databricks_external/": You can use this location to store any external tables that you have created that are mapped to the maa_{domain}_cnfz schemas.
+
+"s3://maa-purpose-data-{env}/databricks_external/": You can use this location to store any external tables that you have created that are mapped to the maa_{domain}_pubz schema.
+
+To provide additional subdivision of assets and make it easier to identify them, we also recommend that you add another subdirectory containing the name of your domain. For example, if you are part of the 'Provider' domain, we recommend that you store any required external tables in either "s3://maa-integrated-data-{env}/databricks_external/maa_prov/<your_table>" or "s3://maa-purpose-data-{env}/databricks_external/maa_prov/<your_table>"
+For examples of how you may utilize external tables, please check out the below code examples in the terraform-maa-curation-examples repository:
+External Table Job Example TF Code: terraform-maa-curation-examples/module/databricks/examples/maa_databricks_job_example_ext_tbl.tf at main · cigna/terraform-maa-curation-examples
+External Table Example Notebook: terraform-maa-curation-examples/module/databricks/examples/artifacts/notebooks/maa_databricks_ntbk_task_example_ext_tbl.py at main · cigna/terraform-maa-curation-examples
+Environment Access and Data (DEV/TEST/PROD)
+DEV/TEST
+Both offshore and onsite personnel will be able to access the Development and Testing environments
+Production-level data is forbidden inside both the Development environment and Testing environment. Only dummy data and synthetic data are allowed.
+PROD
+For security and compliance reasons, only onsite personnel will be able to access the MAA Databricks Production environment. 
