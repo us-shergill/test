@@ -1,3 +1,5 @@
+Databricks - Add support for volume based init-scripts in MAA Databricks job repo
+
 ## Iterate through jobs with the "NEW_NOTEBOOK" type and create all the new notebooks
 resource "databricks_notebook" "new_notebooks" {
   for_each = { for notebook in local.new_notebook_iterator : notebook.task_source => notebook }
