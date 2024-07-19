@@ -1,230 +1,391 @@
-Task: Take 20 CDO objects and 10 SV objects from the Teradata OSS_PROVSIONING_V database in OSS and identify how that object would be renamed if the same object lived in the MAA Databricks Platform.
+## Iterate through jobs with the "NEW_NOTEBOOK" type and create all the new notebooks
+resource "databricks_notebook" "new_notebooks" {
+  for_each = { for notebook in local.new_notebook_iterator : notebook.task_source => notebook }
+  source   = each.value.task_source
+  path     = "/${lower(var.domain_name)}/${lower(var.project_name)}/${each.value.task_name}"
+  
+}
+
+resource "databricks_job" "multitask_jobs" {
+  for_each            = { for job in local.updated_jobs : job.job_name => job }
+  name                = each.value.job_name
+  max_concurrent_runs = var.max_concurrent_runs
+  timeout_seconds     = var.timeout
+  retry_on_timeout    = var.retry_on_timeout
+  max_retries         = var.max_retries
+  always_running      = var.always_running
+
+  tags = merge(var.required_tags, var.optional_tags,
+    {
+      "JobName" = each.value.job_name
+    }
+  )
+
+  # Make this dynamic instead of passing the boolean var into the queue block because queue is only available in provider version 1.3.0 or greater
+  dynamic "queue" {
+    for_each = var.enable_queue ? [1] : []
+    content {
+      enabled = true
+    }
+  }
+
+  ## Add a schedule to the job if one was passed in
+  dynamic "schedule" {
+    for_each = var.schedule == null ? [] : [var.schedule]
+    content {
+      quartz_cron_expression = lookup(schedule.value, "cron_expression", null)
+      timezone_id            = lookup(schedule.value, "timezone_id", null)
+      pause_status           = lookup(schedule.value, "pause_status", null)
+    }
+  }
 
 
+  # What do these webhooks represent? Do we need these?
+  dynamic "webhook_notifications" {
+    for_each = length(var.webex_notifications) > 0 ? [1] : []
 
-OSS (Teradata) Connections strings:
-DEV/QA/INT/UAT -> AWSTDPVS.SYS.CIGNA.COM
-PROD -> AWSTDPRD1.SYS.CIGNA.COM
+    content {
+      on_failure {
+        id = contains(var.webex_notifications, "failure") ? local.webhook_destinations[var.env] : null
+      }
+
+      on_start {
+        id = contains(var.webex_notifications, "start") ? local.webhook_destinations[var.env] : null
+      }
+
+      on_success {
+        id = contains(var.webex_notifications, "success") ? local.webhook_destinations[var.env] : null
+      }
+    }
+  }
+  
+  dynamic "email_notifications" {
+    for_each = var.email_notifications == null ? [] : [var.email_notifications]
+
+    content {
+      on_start   = lookup(email_notifications.value, "on_start", null)
+      on_success = lookup(email_notifications.value, "on_success", null)
+      on_failure = lookup(email_notifications.value, "on_failure", null)
+    }
+  }
+
+  ## Create cluster for all jobs to use
+  job_cluster {
+    job_cluster_key = each.value.job_name
+    ## This module currently does not support a new cluster definition for each task. It's required that all tasks run on the same cluster.
+    new_cluster {
+      dynamic "autoscale" {
+        for_each = each.value.cluster_size == "single_node" ? [] : [1]
+        content {
+          min_workers = local.cluster_map[each.value.cluster_size]["min"]
+          ## Pull cluster size from cluster map using the appropriate cluster size
+          max_workers = local.cluster_map[each.value.cluster_size]["max"]
+        }
+      }
+      num_workers = each.value.cluster_size == "single_node" ? 0 : null
+
+      policy_id               = local.is_maa_admin ? null : data.aws_ssm_parameter.policy_id.value
+      spark_version           = var.spark_version
+      instance_pool_id        = local.cluster_map[each.value.cluster_size]["pool"]
+      driver_instance_pool_id = local.cluster_map[each.value.cluster_size]["pool"]
+      data_security_mode      = var.enable_unity_catalog ? var.unity_catalog_data_security_mode : "NONE"
+      custom_tags = each.value.cluster_size == "single_node" ? merge(var.required_tags, var.optional_tags,
+        {
+          "JobName"       = each.value.job_name
+          "ResourceClass" = "SingleNode"
+        }) : merge(var.required_tags, var.optional_tags,
+        {
+          "JobName" = each.value.job_name
+        }
+      )
+
+      spark_conf = each.value.cluster_size == "single_node" ? merge(local.single_node_spark_conf, merge(local.shared_spark_conf, each.value.spark_conf)) : merge(local.shared_spark_conf, each.value.spark_conf)
+      aws_attributes {
+        instance_profile_arn = (
+          local.is_maa_admin ? "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/MAA-DatabricksAdminInstanceProfile" 
+          : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/MAA-DBRXInstanceSQL"
+        )
+      }
+      cluster_log_conf {
+        s3 {
+          ## Use the default log location if nothing else is provided
+          destination = var.cluster_log_s3_location == "none" ? "s3://maa-databricks-logs-${var.env}/databricks/apps/${lower(var.domain_name)}/${each.value.job_name}" : "${var.cluster_log_s3_location}/${each.value.job_name}"
+          ## Use the default log location if nothing else is provided
+          region            = "us-east-1"
+          enable_encryption = "true"
+          canned_acl        = "bucket-owner-full-control"
+        }
+      }
+      spark_env_vars = merge(local.shared_spark_vars, each.value.spark_env_vars, {
+        ## Combine the shared spark env vars with the job specific env vars
+        "job_name" = each.value.job_name
+      })
+
+      ## Default init scripts
+      dynamic "init_scripts" {
+        for_each = var.disable_init_scripts ? [] : local.default_init_scripts
+        ## Use default init scripts if not disabled
+        content {
+          s3 {
+            destination = init_scripts.value.destination
+            region      = init_scripts.value.region
+          }
+        }
+      }
+
+      ## User entered cluster init scripts stored in s3
+      dynamic "init_scripts" {
+        for_each = var.cluster_s3_init_scripts
+        content {
+          s3 {
+            destination = init_scripts.value.destination
+            region      = init_scripts.value.region
+          }
+        }
+      }
+
+      ## User entered cluster init scripts stored in dbfs
+      dynamic "init_scripts" {
+        for_each = var.cluster_dbfs_init_scripts
+        content {
+          dbfs {
+            destination = init_scripts.value
+          }
+        }
+      }
+
+      ## Cigna pem init scripts stored in s3. Install it optionally on a cluster
+      dynamic "init_scripts" {
+        for_each = var.install_cigna_ca_certs ? local.cigna_pem_init_scripts : []
+        content {
+          s3 {
+            destination = init_scripts.value.destination
+            region      = init_scripts.value.region
+          }
+        }
+      }
+    }
+  }
 
 
-cdoAdmissionSourceDim                          |
-cdoAdmissionTypeDim                            |
-cdoAuthorizationFact                           |
-cdoAuthorizationICDDiagnosisCode               |
-cdoAuthorizationICDProcedureCode               |
-cdoAuthorizationServiceFact                    |
-cdoAuthorizationStatusFact                     |
-cdoBusinessSector                              |
-cdoCCSRDiagnosisCode                           |
-cdoClaimAmbulanceInformation                   |
-cdoClaimBucketDim                              |
-cdoClaimCondition                              |
-cdoClaimDiagnosisCode                          |
-cdoClaimFormTypeCodeDim                        |
-cdoClaimICDProcedureCode                       |
-cdoClaimLineDiagnosisCode                      |
-cdoClaimStatusCodeDim                          |
-cdoClinicalAuthorization                       |
-cdoClinicalGrievance                           |
-cdoClinicalProgramReferralEnrollmentIncremental|
-cdoDrugGcn                                     |
-cdoDrugGpi                                     |
-cdoEmployerGroup                               |
-cdoEncounterClaimDetail                        |
-cdoEncounterMedicalClaimDetail                 |
-cdoEncounterMedicalClaimDetailIncremental      |
-cdoFinancialBalancingAudit                     |
-cdoFinancialJournalEntry                       |
-cdoHealthPlan                                  |
-cdoHealthPlanBenefit                           |
+  # git_source {
+  #     url = var.dbt_git_source_url
+  #     provider = var.dbt_git_source_provider
+  #     branch = var.dbt_git_source_branch
+  #   }
 
 
-svAdjustmentGroupCodeDim                |
-svAdjustmentReasonCodeDim               |
-svAdmissionSourceDim                    |
-svAdmissionTypeDim                      |
-svAuthorizationFact                     |
-svAuthorizationIcdDiagnosisCodeDim      |
-svAuthorizationIcdProcedureCodeDim      |
-svAuthorizationMemoDim                  |
-svAuthorizationServiceFact              |
-svAuthorizationStatusCodeDim            |
-svAuthorizationStatusFact               |
-svAuthorizationTypeDim                  |
-svBedTypeDim                            |
-svBenefitInformationDim                 |
-svBillClassCodeDim                      |
-svBusinessSectorDim                     |
-svBusinessSectorDimension               |
-svClaimAdjustmentDim_DEPRECATED_07282023|
-svClaimAdjustmentGroupDim               |
-svClaimAdjustmentReasonDim              |
+  ## Create Tasks according to user input. Libraries are defined at the task level so they're created first
+  dynamic "task" {
 
-Table Naming Conventions
-Below is the third draft of the MAA Databricks Platform naming conventions as of 05/30/2024. Please note that these standards and best practices are subject to change as requirements evolve based on stakeholder feedback.
+    for_each = { for task in each.value.tasks : task.task_name => task }
+    
+    
 
-Data Being Replicated from OSS
-For data originally sourced from OSS, please follow the below naming conventions in lower case:
+    content {
+      ## This module currently does not support a new cluster definition for each task. It's required that all tasks run on the same cluster.
+      job_cluster_key           = task.value.task_type == "PIPELINE" ? null : each.value.job_name
+      task_key                  = task.value.task_name
+      max_retries               = contains(keys(task.value.task_params), "retry_count") ? task.value.task_params["retry_count"] : 0
+      min_retry_interval_millis = contains(keys(task.value.task_params), "retry_delay_in_ms") ? task.value.task_params["retry_delay_in_ms"] : 5000
 
-<database_name_with_'_v'_removed>_<table_name>
-OSS Example for data originally sourced from BUSINESS_OPS_CORE_DEV2_V.EXT_SALES_CHANNEL_PROJ_MIX (DEV): business_ops_core_dev2_ext_sales_channel_proj_mix
-OSS Example for data originally sourced from REPORTING_INT_V.SDO_MILL_REPRC_CLM_MED (TEST): reporting_int_sdo_mill_reprc_clm_med
-OSS Example for data originally sourced from OSS_EXPORT_V.CDO_MED_CLM_DTL (PROD): oss_export_cdo_med_clm_dtl
-All Other Data
-For all other data, please follow the below naming conventions:
+      
 
-For maa_{domain}_rawz and maa_{domain}_rawz_v, as well as maa_{domain}_cnfz and maa_{domain}_cnfz_v: <domain>_<entity>
-Examples:
-clm_med_dtl
-clm_phrm
-auth_admsn_hdr
-clncl_grv
-mbr_demg
-fncl_bal_aud
-For maa_{domain}_pubz and maa_{domain}_pubz_v: <domain>_<entity>_<time window>
-Examples:
-clm_enrlmt_monthly
-sales_agt_hier (no suffix for current data)
-prov_hier_history
-fncl_revnu_pharm_yearly
-fncl_revnu_med_quarterly
-mbr_condn (no suffix for current data)
-Backups and Snapshots: For all backups and snapshots, simply add the suffix "_bkp" for backups and "_snpsht" for snapshots, followed by the date of the backup/snapshot in yyyymmdd format (Example: fncl__cost_current_bkp_20240326)
+      ## Install default libraries if not disabled
+      dynamic "library" {
+        for_each = (var.disable_libraries || contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type)) ? [] : local.default_libraries
+        content {
+          whl = library.value.type == "whl" ? library.value.location : null
+          jar = library.value.type == "jar" ? library.value.location : null
+          egg = library.value.type == "egg" ? library.value.location : null
+        }
+      }
 
-Delta Live Tables: When utilizing Delta live tables, simply add the "_dlt" suffix to your table names to denote it is part of a DLT Pipeline (Example: fncl_cost_current_dlt)
+      ## User entered clustered libraries
+      dynamic "library" {
+        for_each = contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type) ? [] : var.cluster_libraries
+        content {
+          whl = library.value.type == "whl" ? library.value.location : null
+          jar = library.value.type == "jar" ? library.value.location : null
+          egg = library.value.type == "egg" ? library.value.location : null
+        }
+      }
 
-DBT: When utilizing DBT for your workflow, please use the below prefixes based on your model stage:
+      ## User entered pip libraries
+      dynamic "library" {
+        for_each = contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type) ? [] : var.pip_libraries
+        content {
+          pypi {
+            package = library.value
+          }
+        }
+      }
 
-maa_{domain}_rawz / maa_{domain}_rawz_v → "stg_" (Example: stg_fncl_cost)
-maa_{domain}_cnfz / maa_{domain}_cnfz_v → "int_" (Example: int_fncl_cost)
-maa_{domain}_pubz / maa_{domain}_pubz_v → "mart_" / "dim_" / "fct_" / "agg_" (whichever makes more sense for your use case) (Example: mart_fncl_cost_daily)
+      # Load default pip packages unless disable_libraries is true
+      dynamic "library" {
+        for_each = (var.disable_libraries || contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type)) ? [] : local.default_pip_packages
+        content {
+          pypi {
+            package = library.value
+            repo    = local.pip_index_url
+          }
+        }
+      }
 
-Examples of domains for table naming conventions
-Authorization → auth
+      ## User entered pypi libraries. Typically used to read packages from artifactory
+      dynamic "library" {
+        for_each = contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type) ? [] : var.pypi_libraries
+        content {
+          pypi {
+            package = library.value.package
+            repo    = library.value.repo != "" ? library.value.repo : local.pip_index_url
+          }
+        }
+      }
 
-Claims (Including Pharmacy/Encounter claims data) → clm
-Client → clnt
-Clinical (Including Quality data) → clncl
-Financial → fncl
-Member → mbr
-Product → prdct
-Provider → prov
-Reference → ref
-Sales (Including Broker/Commission/Marketing data) → sales
-Examples of entities for table naming conventions (can be combined for accuracy if needed)
-activity → acty
-address → addr
-admission → admsn
-accumulator → accumr
-adjustment → adj
-agent → agt
-ambulance → amblc
-appeal → appeal
-application → app
-ancillary → ancil
-assessment → asmt
-audit → aud
-avoidable → avdbl
-avoidance → avdnc
-balance → bal
-bed → bed
-benefit → ben
-bids → bids
-bill → bill
-broker → broker
-call → call
-code → cd
-component → cmpnt
-condition → condn
-configuration → confgrtn
-contract → cntrct
-control → cntrl
-cost → cost
-county → cnty
-coverage → cvrg
-cross reference → xref
-clinical risk score → crs
-customer → cust
-demographic → demg
-detail → dtl
-determination → determtn
-diagnosis → diag 
-dimension → dim
-drug → drug
-dsnp → dsnp
-eligibility → elgbty
-employer → emplr
-encounter → encntr
-event → event
-exclusion → excl
-facets → fcts
-fact → fct
-grievance → grv
-group → grp
-header → hdr
-healthplan → hlthpln
-hierarchy → hier
-icd → icd
-incremental → incrmtl
-inpatient → inpa
-inventory → invntry
-invoice → inv
-lab → lab
-language → lang
-line → ln
-list → list
-location → loc
-management → mgmnt
-manager → mgr
-mail → mail
-medicaid → medcd
-medical → med
-medicare → medcr
-mhk → mhk
-npi → npi
-operation → opern
-organization → org
-outpatient → outpa
-patient → patnt
-payment → paymt
-pcp → pcp
-pharmacy → phrm
-plan → plan
-practitioner → practnr
-premium → prem
-procedure → proc
-program → prog
-readmission risk score → rrs
-reason → rsn
-rebate → reb
-receipt → recpt
-reconciliation → recon
-recovery → recvry
-referral → refrl
-region → regn
-registry → rgstry
-rehab → rehab
-relation → reltn
-report → rpt
-revenue → revnu
-risk → risk
-sector → sctr
-service → svc
-snp → snp
-special → specl
-source → src
-status → stat
-summary → sum
-supplement → suplmnt
-transaction → trnsctn
-type → ty
-withholding → wthhldg
-yearly → yrly
-Examples of time windows for table naming conventions
-daily
-weekly
-monthly
-quarterly
-yearly
-<no suffix> (denotes that data object only contains current data, with no history)
-history (denotes that data object contains both current and historical data)
+      ## User entered maven libraries
+      dynamic "library" {
+        for_each = contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type) ? [] : var.maven_libraries
+        content {
+          maven {
+            coordinates = library.value.coordinates
+            repo        = library.value.repo != "" ? library.value.repo : null
+            exclusions  = length(library.value.exclusions) != 0 ? tolist(library.value.exclusions) : null
+          }
+        }
+      }
+
+      ## Create depends on blocks
+      dynamic "depends_on" {
+        for_each = { for dep in task.value.depends_on : dep => dep }
+        content {
+          task_key = depends_on.value
+        }
+      }
+
+      ## Only one of the following tasks will be created for each task based on the task type
+
+      ## Existing notebook job type
+      dynamic "notebook_task" {
+        for_each = task.value.task_type == "NEW_NOTEBOOK" ? [1] : []
+        content {
+          notebook_path   = databricks_notebook.new_notebooks[task.value.task_source].path
+          base_parameters = task.value.task_params
+        }
+      }
+
+      ## Existing notebook job type
+      dynamic "notebook_task" {
+        for_each = task.value.task_type == "EXISTING_NOTEBOOK" ? [1] : []
+        content {
+          notebook_path   = task.value.task_source
+          base_parameters = task.value.task_params
+        }
+      }
+
+      ## S3_PYSPARK job type
+      dynamic "spark_python_task" {
+        for_each = task.value.task_type == "S3_PYSPARK" ? [1] : []
+        content {
+          python_file = task.value.task_source
+          parameters  = flatten([for key, val in task.value.task_params : [key, val]])
+        }
+      }
+
+      ## S3_JAR job type
+      dynamic "spark_jar_task" {
+        for_each = task.value.task_type == "S3_JAR" ? [1] : []
+        content {
+          main_class_name = task.value.task_source
+          parameters      = flatten([for key, val in task.value.task_params : [key, val]])
+        }
+      }
+
+      ## dbt job type
+      dynamic "dbt_task" {
+        for_each = task.value.task_type == "DBT_TASK" ? [1] : []
+        
+        content {
+          
+          commands = split(",", task.value.task_params["dbt_commands"])  # ["dbt deps", "dbt debug", "dbt run"]
+          project_directory = task.value.task_params["project_directory"] # "./module/dbt/dbt_demo"
+          catalog = task.value.task_params["catalog"] # "maa_dev"
+          warehouse_id = task.value.task_params["warehouse_id"]          
+        }
+
+      }
+
+      ## Pipeline task
+      dynamic "pipeline_task" {
+        for_each = task.value.task_type == "PIPELINE" ? [1] : []
+        content {
+          pipeline_id = task.value.task_source
+        }
+      }
+    }
+  }
+}
+
+
+## Grant access to your domain to view and run the job
+resource "databricks_permissions" "multitask_job_usage" {
+  for_each = { for job in local.updated_jobs : job.job_name => job }
+  job_id   = databricks_job.multitask_jobs[each.value.job_name].id
+
+  access_control {
+    group_name       = local.group_name
+    permission_level = lower(var.env) == "dev" ? "CAN_MANAGE" : "CAN_MANAGE_RUN"
+  }
+
+  access_control {
+    service_principal_name = data.databricks_current_user.me.user_name
+    permission_level       = "CAN_MANAGE"
+  }
+
+  # Add permissions on job creation, but allow access management to manage permissions after
+  lifecycle {
+    ignore_changes = [access_control]
+
+    precondition {
+      condition     = !var.enable_unity_catalog || anytrue([for application_id in data.databricks_service_principals.uc_sp.application_ids : application_id == data.databricks_current_user.me.user_name]) || local.is_maa_admin
+      error_message = "To use Unity Catalog, you must use your domain's service principal ${local.account_sp_name}. Update your ssm token path in your databricks.tf file to /maa/domain/${lower(var.domain_name)}/databricks/account_token"
+    }
+
+    # Unity catalog has to use spark version 10 or higher
+    precondition {
+      condition     = !var.enable_unity_catalog || startswith(var.spark_version, "1")
+      error_message = "To use Unity Catalog, you must use spark version 10 or higher. Use the default spark version (10.4 LTS) or set it manually"
+    }
+
+    # Validating that the required tag 'UsesTDVJDBC' is a valid value
+    precondition {
+      condition     = var.required_tags.UsesTDVJDBC != null && contains(local.UsesTDVJDBC_valid_values, var.required_tags.UsesTDVJDBC)
+      error_message = "Required tag 'UsesTDVJDBC' value is not valid. Detected value: '${var.required_tags.UsesTDVJDBC}'. Valid values are ${jsonencode(local.UsesTDVJDBC_valid_values)}."
+    }
+
+    # Validating that the required tag 'Domain' is a valid value
+    precondition {
+      condition     = var.required_tags.Domain != null && contains(local.Domain_valid_values, var.required_tags.Domain)
+      error_message = "Required tag 'Domain' value is not valid. Detected value: '${var.required_tags.Domain}'. Valid values are ${jsonencode(local.Domain_valid_values)}."
+    }
+
+    # Validating that the required tag 'Project' is not empty and exists
+    precondition {
+      condition     = var.required_tags.Project != null && length(replace(var.required_tags.Project, " ", "")) > 0
+      error_message = "Required tag 'Project' value is empty or not set. Please specify your project's name."
+    }
+
+    # Validating that the required tag 'Project' is not empty
+    precondition {
+      condition     = var.required_tags.GitHubRepo != null && length(replace(var.required_tags.GitHubRepo, " ", "")) > 0
+      error_message = "Required tag 'GitHubRepo' value is empty or not set. Please specify your GitHubRepo's link."
+    }
+    
+    # Service Now support group must be present in TEST/PROD 
+    precondition {
+      # condition     = upper(var.env) == "DEV" || startswith(upper(var.service_now_support_group), "D&AE - EDE GOVT")
+      condition     = upper(var.env) == "DEV" || length(var.required_tags.ServiceNowSupportGroup) >= 5
+      error_message = "Please specify your Service Now Support Group in the service_now_support_group variable (This is not needed for DEV but is required for TEST/PROD deployments)."
+    }
+  }
+}
