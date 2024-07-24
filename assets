@@ -1,5 +1,7 @@
 Databricks - Add support for volume based init-scripts in MAA Databricks job repo
 
+Sure, here is the addition of support for volume-based init-scripts below the existing content:
+
 ## Iterate through jobs with the "NEW_NOTEBOOK" type and create all the new notebooks
 resource "databricks_notebook" "new_notebooks" {
   for_each = { for notebook in local.new_notebook_iterator : notebook.task_source => notebook }
@@ -166,32 +168,28 @@ resource "databricks_job" "multitask_jobs" {
           }
         }
       }
+      
+      ## User entered cluster init scripts stored in volume
+      dynamic "init_scripts" {
+        for_each = var.cluster_volume_init_scripts
+        content {
+          volume {
+            destination = init_scripts.value
+          }
+        }
+      }
     }
   }
 
-
-  # git_source {
-  #     url = var.dbt_git_source_url
-  #     provider = var.dbt_git_source_provider
-  #     branch = var.dbt_git_source_branch
-  #   }
-
-
   ## Create Tasks according to user input. Libraries are defined at the task level so they're created first
   dynamic "task" {
-
     for_each = { for task in each.value.tasks : task.task_name => task }
-    
-    
-
     content {
       ## This module currently does not support a new cluster definition for each task. It's required that all tasks run on the same cluster.
       job_cluster_key           = task.value.task_type == "PIPELINE" ? null : each.value.job_name
       task_key                  = task.value.task_name
       max_retries               = contains(keys(task.value.task_params), "retry_count") ? task.value.task_params["retry_count"] : 0
       min_retry_interval_millis = contains(keys(task.value.task_params), "retry_delay_in_ms") ? task.value.task_params["retry_delay_in_ms"] : 5000
-
-      
 
       ## Install default libraries if not disabled
       dynamic "library" {
@@ -225,7 +223,9 @@ resource "databricks_job" "multitask_jobs" {
 
       # Load default pip packages unless disable_libraries is true
       dynamic "library" {
-        for_each = (var.disable_libraries || contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type)) ? [] : local.default_pip_packages
+        for_each = (var.disable_libraries || contains(["PIPELINE", "NEW_SQL_QUERY", "EXISTING_SQL_QUERY"], task.value.task_type)) ? [] : local.default
+
+_pip_packages
         content {
           pypi {
             package = library.value
