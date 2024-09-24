@@ -1,90 +1,3 @@
-pip install smbprotocol paramiko
-project/
-│
-├── ingest/
-│   ├── __init__.py
-│   ├── file_ingestion.py
-│   ├── file_transfer.py
-│   ├── error_handling.py
-│   ├── config.py
-│   └── logging_config.py
-│
-├── scripts/
-│   └── main.py
-│
-└── tests/
-    └── test_file_ingestion.py
-
-
-# ingest/config.py
-
-import os
-
-class Config:
-    # DBFS paths
-    SOURCE_FILE_PATH = "/dbfs/mnt/source-data/"
-    PROCESSED_FILE_PATH = "/dbfs/mnt/processed-data/"
-    
-    # NAS Configuration (for SMB)
-    NAS_HOST = "nas.server.com"
-    NAS_SHARE = "shared_folder"
-    NAS_USERNAME = os.getenv("NAS_USERNAME")
-    NAS_PASSWORD = os.getenv("NAS_PASSWORD")
-    NAS_MOUNT_POINT = "/mnt/nas/"
-    
-    # NAS directory paths
-    NAS_TARGET_DIRECTORY = "/mnt/nas/ingested-files/"
-
-    # Logging configuration
-    LOG_FILE = "/dbfs/mnt/logs/file_ingestion.log"
-
-# Read other variables from environment as needed
-
-
-# ingest/logging_config.py
-import logging
-from ingest.config import Config
-
-def setup_logging():
-    logging.basicConfig(filename=Config.LOG_FILE,
-                        level=logging.INFO,
-                        format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger()
-    return logger
-
-
-
-# ingest/file_ingestion.py
-
-from pyspark.sql import SparkSession
-import shutil
-import os
-from ingest.config import Config
-
-def read_file_from_dbfs(file_name):
-    spark = SparkSession.builder.getOrCreate()
-    file_path = os.path.join(Config.SOURCE_FILE_PATH, file_name)
-    
-    try:
-        df = spark.read.format("csv").option("header", True).load(file_path)
-        return df
-    except Exception as e:
-        raise Exception(f"Error reading file from DBFS: {str(e)}")
-
-def move_file_to_processed(file_name):
-    source_path = os.path.join(Config.SOURCE_FILE_PATH, file_name)
-    destination_path = os.path.join(Config.PROCESSED_FILE_PATH, file_name)
-    try:
-        shutil.move(source_path, destination_path)
-        return True
-    except Exception as e:
-        raise Exception(f"Error moving file to processed folder: {str(e)}")
-
-
-
-
-# ingest/file_transfer.py
-
 from smbprotocol.connection import Connection
 from smbprotocol.session import Session
 from smbprotocol.tree import TreeConnect
@@ -94,13 +7,22 @@ from ingest.config import Config
 import os
 
 def connect_to_nas():
-    conn = Connection(uuid="unique_conn_id", username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD,
-                      server_name=Config.NAS_HOST, port=445)
+    # Create a connection object (UUID and username are not required here)
+    conn = Connection(server_name=Config.NAS_HOST, port=445)
+    
+    # Connect the connection
     conn.connect()
-    session = Session(conn)
+    
+    # Create a session object with authentication
+    session = Session(conn, username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
+    
+    # Connect the session
     session.connect()
-    tree = TreeConnect(session, Config.NAS_SHARE)
+    
+    # Connect to the shared folder (NAS_SHARE)
+    tree = TreeConnect(session, f"\\\\{Config.NAS_HOST}\\{Config.NAS_SHARE}")
     tree.connect()
+    
     return tree
 
 def transfer_file_to_nas(tree, local_file, remote_file):
@@ -129,47 +51,3 @@ def transfer_files(file_name):
         return True
     except Exception as e:
         raise Exception(f"Error transferring file to NAS: {str(e)}")
-
-
-
-# ingest/error_handling.py
-
-def retry_on_failure(function, retries=3):
-    for attempt in range(retries):
-        try:
-            return function()
-        except Exception as e:
-            if attempt + 1 == retries:
-                raise e
-            print(f"Retrying due to error: {str(e)} (Attempt {attempt + 1}/{retries})")
-
-
-
-# scripts/main.py
-
-from ingest.file_ingestion import read_file_from_dbfs, move_file_to_processed
-from ingest.file_transfer import transfer_files
-from ingest.logging_config import setup_logging
-from ingest.error_handling import retry_on_failure
-
-logger = setup_logging()
-
-def process_file(file_name):
-    try:
-        # Read file from DBFS
-        df = retry_on_failure(lambda: read_file_from_dbfs(file_name))
-        
-        # Transfer to NAS
-        retry_on_failure(lambda: transfer_files(file_name))
-        
-        # Move file to processed folder
-        retry_on_failure(lambda: move_file_to_processed(file_name))
-
-        logger.info(f"File {file_name} processed and transferred successfully.")
-
-    except Exception as e:
-        logger.error(f"Failed to process file {file_name}: {str(e)}")
-
-if __name__ == "__main__":
-    file_name = "example_file.csv"
-    process_file(file_name)
