@@ -1,6 +1,54 @@
-INFO:smbprotocol.tree:Session: c8r6kn - Creating connection to share \\wdcnapss502.internal.cigna.com\CHS_DMS/
-INFO:smbprotocol.tree:Session: c8r6kn - Sending Tree Connect message
-INFO:smbprotocol.tree:Session: c8r6kn - Receiving Tree Connect response
-INFO:smbprotocol.tree:Session: c8r6kn - Created tree connection with ID 1
-INFO:smbprotocol.tree:Session: c8r6kn, Tree: \\wdcnapss502.internal.cigna.com\CHS_DMS/ - Running secure negotiate process
-ERROR:root:Failed to process file problematic_user_summary.csv: Error transferring file to NAS: type object 'FileAttributes' has no attribute 'FILE_APPEND_DATA'
+from smbprotocol.connection import Connection
+from smbprotocol.session import Session
+from smbprotocol.tree import TreeConnect
+from smbprotocol.open import Open
+from smbprotocol.file_info import FileAttributes
+from ingest.config import Config
+import os
+import uuid
+
+def connect_to_nas():
+    # Create a connection object (UUID and username are not required here)
+    conn = Connection(uuid.uuid4(),server_name=Config.NAS_HOST, port=445)
+    
+    # Connect the connection
+    conn.connect()
+    
+    # Create a session object with authentication
+    session = Session(conn, username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
+    
+    # Connect the session
+    session.connect()
+    
+    # Connect to the shared folder (NAS_SHARE)
+    tree = TreeConnect(session, f"\\\\{Config.NAS_HOST}\\{Config.NAS_SHARE}")
+    tree.connect()
+    
+    return tree
+
+def transfer_file_to_nas(tree, local_file, remote_file):
+    with open(local_file, 'rb') as f:
+        file_size = os.path.getsize(local_file)
+        open_file = Open(tree, remote_file, desired_access=FileAttributes.FILE_APPEND_DATA)
+        open_file.create()
+
+        chunk_size = 1024 * 64  # 64 KB chunks
+        bytes_written = 0
+
+        while bytes_written < file_size:
+            data = f.read(chunk_size)
+            open_file.write(data, offset=bytes_written)
+            bytes_written += len(data)
+
+        open_file.close()
+
+def transfer_files(file_name):
+    tree = connect_to_nas()
+    local_file = os.path.join(Config.SOURCE_FILE_PATH, file_name)
+    remote_file = os.path.join(Config.NAS_TARGET_DIRECTORY, file_name)
+
+    try:
+        transfer_file_to_nas(tree, local_file, remote_file)
+        return True
+    except Exception as e:
+        raise Exception(f"Error transferring file to NAS: {str(e)}")
