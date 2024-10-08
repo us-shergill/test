@@ -1,54 +1,47 @@
-from smbprotocol.connection import Connection
-from smbprotocol.session import Session
-from smbprotocol.tree import TreeConnect
-from smbprotocol.open import Open
-from smbprotocol.file_info import FileAttributes
-from ingest.config import Config
+import smbclient
 import os
-import uuid
+from ingest.config import Config
+
+# Set up global credentials for smbclient
+smbclient.ClientConfig(username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
 
 def connect_to_nas():
-    # Create a connection object (UUID and username are not required here)
-    conn = Connection(uuid.uuid4(),server_name=Config.NAS_HOST, port=445)
-    
-    # Connect the connection
-    conn.connect()
-    
-    # Create a session object with authentication
-    session = Session(conn, username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
-    
-    # Connect the session
-    session.connect()
-    
-    # Connect to the shared folder (NAS_SHARE)
-    tree = TreeConnect(session, f"\\\\{Config.NAS_HOST}\\{Config.NAS_SHARE}")
-    tree.connect()
-    
-    return tree
+    """
+    Since smbclient handles sessions internally, we don't need to explicitly create
+    connection and session objects as with smbprotocol. This method now just registers the session.
+    """
+    smbclient.register_session(Config.NAS_HOST, username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
+    print(f"Connected to NAS share: \\\\{Config.NAS_HOST}\\{Config.NAS_SHARE}")
 
-def transfer_file_to_nas(tree, local_file, remote_file):
+def transfer_file_to_nas(local_file, remote_file):
+    """
+    Reuse the original logic of transferring the file in chunks, now using smbclient.
+    """
     with open(local_file, 'rb') as f:
-        file_size = os.path.getsize(local_file)
-        open_file = Open(tree, remote_file, desired_access=FileAttributes.FILE_APPEND_DATA)
-        open_file.create()
-
-        chunk_size = 1024 * 64  # 64 KB chunks
-        bytes_written = 0
-
-        while bytes_written < file_size:
-            data = f.read(chunk_size)
-            open_file.write(data, offset=bytes_written)
-            bytes_written += len(data)
-
-        open_file.close()
+        # Open the remote file in write mode using smbclient
+        with smbclient.open_file(remote_file, mode='wb', username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD) as remote_fd:
+            chunk_size = 1024 * 64  # 64 KB chunks
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                remote_fd.write(chunk)
+    print(f"File {os.path.basename(local_file)} transferred to {remote_file} on NAS.")
 
 def transfer_files(file_name):
-    tree = connect_to_nas()
+    """
+    Use the updated connect_to_nas and transfer_file_to_nas methods.
+    """
+    # Register session
+    connect_to_nas()
+
+    # Define the local and remote file paths
     local_file = os.path.join(Config.SOURCE_FILE_PATH, file_name)
-    remote_file = os.path.join(Config.NAS_TARGET_DIRECTORY, file_name)
+    remote_file = fr"\\{Config.NAS_HOST}\{Config.NAS_SHARE}\{Config.NAS_TARGET_DIRECTORY}\{file_name}"
 
     try:
-        transfer_file_to_nas(tree, local_file, remote_file)
+        transfer_file_to_nas(local_file, remote_file)
         return True
     except Exception as e:
         raise Exception(f"Error transferring file to NAS: {str(e)}")
+
