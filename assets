@@ -1,47 +1,14 @@
-import smbclient
-import os
-from ingest.config import Config
+In our MAA Databricks Platform, we have provisioned the Business Mart Service principal (and our own internal team) with access to create schemas in the gedp_{env} catalog. They need this access to support their deployment and testing process. 
 
-# Set up global credentials for smbclient
-smbclient.ClientConfig(username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
+However, provisioning this access now allows for the possibilities of junk schemas being created and not properly deleted. As such, in order to ensure that this is properly governed, we need to create a databricks job and accompanying alert that will run periodically to check the gedp_{env} catalog for the existence of any unexpected schemas.
 
-def connect_to_nas():
-    """
-    Since smbclient handles sessions internally, we don't need to explicitly create
-    connection and session objects as with smbprotocol. This method now just registers the session.
-    """
-    smbclient.register_session(Config.NAS_HOST, username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD)
-    print(f"Connected to NAS share: \\\\{Config.NAS_HOST}\\{Config.NAS_SHARE}")
+This story will capture the analysis portion of this work, and another story wil be created to track the development work.
 
-def transfer_file_to_nas(local_file, remote_file):
-    """
-    Reuse the original logic of transferring the file in chunks, now using smbclient.
-    """
-    with open(local_file, 'rb') as f:
-        # Open the remote file in write mode using smbclient
-        with smbclient.open_file(remote_file, mode='wb', username=Config.NAS_USERNAME, password=Config.NAS_PASSWORD) as remote_fd:
-            chunk_size = 1024 * 64  # 64 KB chunks
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                remote_fd.write(chunk)
-    print(f"File {os.path.basename(local_file)} transferred to {remote_file} on NAS.")
+I had discussion with Cody on the design
 
-def transfer_files(file_name):
-    """
-    Use the updated connect_to_nas and transfer_file_to_nas methods.
-    """
-    # Register session
-    connect_to_nas()
+We will create a databricks job in gedp-databricks-infra repo that gets passed the output of the terraform list of expected schemas as a parameter 
 
-    # Define the local and remote file paths
-    local_file = os.path.join(Config.SOURCE_FILE_PATH, file_name)
-    remote_file = fr"\\{Config.NAS_HOST}\{Config.NAS_SHARE}\{Config.NAS_TARGET_DIRECTORY}\{file_name}"
+Example Databricks Job Terraform code to use as reference: https://github.com/zilvertonz/gedp-databricks-infra/blob/develop/module/databricks/ws_admin/dbx_job_enable_compute.tf
+We can run the job daily to flag any schemas not expected and sent to 
 
-    try:
-        transfer_file_to_nas(local_file, remote_file)
-        return True
-    except Exception as e:
-        raise Exception(f"Error transferring file to NAS: {str(e)}")
-
+gedp_workspace_admin_member_emails
