@@ -12,3 +12,74 @@ Example Databricks Job Terraform code to use as reference: https://github.com/zi
 We can run the job daily to flag any schemas not expected and sent to 
 
 gedp_workspace_admin_member_emails
+
+# GEDP Domain/DM/Admin Schemas
+resource "databricks_schema" "gedp_catalog_schemas" {
+  catalog_name = local.gedp_catalog.name
+  for_each     = local.gedp_catalog_schemas
+  name         = each.value["schema_name"]
+  comment      = each.value["description"]
+}
+
+# GEDP Secure Data Team Schemas
+resource "databricks_schema" "gedp_catalog_schemas" {
+  catalog_name = local.gedp_catalog.name
+  for_each     = { for config in local.secure_data_teams_with_sp : config.TeamName => config if config.CreateTeamSchema }
+  name         = each.key
+  owner        = each.value.SpAppId
+  comment      = "Schema for Secure Data Team ${each.key}"
+}
+
+----------------------------------------
+
+module "enable_compute" {                                                                          #INIT-module
+  source        = "git::https://github.com/zilvertonz/gedp-databricks-terraform-jobs.git?ref=main" ## Set to the tag that you need
+  env           = var.env
+  domain_name   = var.domain_name
+  project_name  = var.project_name
+  spark_version = var.spark_version
+  depends_on    = [aws_ssm_parameter.admin_cluster_policy_id]
+  jobs = [
+    {
+      job_name       = "gedp_workspace_admin_${var.env}_enable_compute" #INIT-job_name
+      cluster_size   = "xs"
+      spark_conf     = var.default_spark_conf
+      spark_env_vars = { ENV = var.env }
+      tasks = [
+        {
+          task_name   = "enable_compute"                                                  #INIT-task_name
+          task_source = "${path.module}/artifacts/notebooks/enable_or_disable_compute.py" #INIT-task_source
+          task_type : "NEW_NOTEBOOK"
+          task_params = {
+            env : var.env,
+            enable_or_disable : "enable",
+            sql_warehouse_names : local.sql_warehouses_for_business_hours,
+            cluster_names : local.clusters_for_business_hours,
+            databricks_workspace_base_url : local.gedp_workspace_host
+          }
+          depends_on = []
+        }
+      ]
+    }
+  ]
+  cluster_libraries       = []
+  cluster_s3_init_scripts = []
+  pip_libraries           = ["requests"]
+  timeout                 = "3600" ## Optional
+  required_tags = merge(local.required_dbx_tags, {
+    UsesTDVJDBC = "NO" # Denote whether or not this job uses JDBC to connect to Terradata. Used for tracking purposes. Options are "YES" or "NO"
+  })
+  optional_tags = {}
+
+  schedule = {
+    cron_expression = "0 0 21 ? * * *",                         ## Quartz Cron Expression Syntax
+    timezone_id     = "America/New_York",                       ## Java TimeZone format
+    pause_status    = var.env == "prod" ? "UNPAUSED" : "PAUSED" ## Options are PAUSED/UNPAUSED
+  }
+
+  email_notifications = {
+    on_start   = []
+    on_success = local.gedp_workspace_admin_member_emails
+    on_failure = local.gedp_workspace_admin_member_emails
+  }
+}
