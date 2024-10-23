@@ -1,18 +1,17 @@
 import smbclient
 import os
-from ingest.config import Config
 
 class NASClient:
-    def __init__(self):
+    def __init__(self, username, password, host, share, target_directory, source_file_path):
         """
         Initialize the NASClient class and set up instance variables with NAS credentials and paths.
         """
-        self.username = Config.NAS_USERNAME
-        self.password = Config.NAS_PASSWORD
-        self.host = Config.NAS_HOST
-        self.share = Config.NAS_SHARE
-        self.target_directory = Config.NAS_TARGET_DIRECTORY
-        self.source_file_path = Config.SOURCE_FILE_PATH
+        self.username = username
+        self.password = password
+        self.host = host
+        self.share = share
+        self.target_directory = target_directory
+        self.source_file_path = source_file_path
 
         # Set up global credentials for smbclient
         smbclient.ClientConfig(username=self.username, password=self.password)
