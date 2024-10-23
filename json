@@ -1,51 +1,68 @@
-import smbclient
+module "check_schemas" {
+  source        = "git::https://github.com/zilvertonz/gedp-databricks-terraform-jobs.git?ref=main"
+  env           = var.env
+  domain_name   = var.domain_name
+  project_name  = var.project_name
+  spark_version = var.spark_version
+
+  jobs = [
+    {
+      job_name     = "gedp_check_schemas_${var.env}"
+      cluster_size = "xs"
+      tasks = [
+        {
+          task_name   = "check_schemas_task"
+          task_source = "${path.module}/artifacts/notebooks/check_schemas.py"
+          task_type   = "NEW_NOTEBOOK"
+          task_params = {
+            env         = var.env
+            expected_schemas = var.expected_schemas_list  # List of expected schemas passed to the job
+          }
+        }
+      ]
+    }
+  ]
+
+  schedule = {
+    cron_expression = "0 0 21 ? * * *"  # Run daily at 9 PM New York time
+    timezone_id     = "America/New_York"
+    pause_status    = var.env == "prod" ? "UNPAUSED" : "PAUSED"
+  }
+
+  email_notifications = {
+    on_start   = []
+    on_success = local.gedp_workspace_admin_member_emails
+    on_failure = local.gedp_workspace_admin_member_emails
+  }
+}
+
+
+
+
+
+from pyspark.sql import SparkSession
+import smtplib
 import os
 
-class NASClient:
-    def __init__(self, username, password, host, share, target_directory, source_file_path):
-        """
-        Initialize the NASClient class and set up instance variables with NAS credentials and paths.
-        """
-        self.username = username
-        self.password = password
-        self.host = host
-        self.share = share
-        self.target_directory = target_directory
-        self.source_file_path = source_file_path
+def get_existing_schemas(catalog):
+    spark = SparkSession.builder.getOrCreate()
+    query = f"SHOW SCHEMAS IN {catalog}"
+    return [row.schemaName for row in spark.sql(query).collect()]
 
-        # Set up global credentials for smbclient
-        smbclient.ClientConfig(username=self.username, password=self.password)
+def send_alert(unexpected_schemas, emails):
+    alert_message = f"Unexpected schemas detected: {', '.join(unexpected_schemas)}"
+    # Sending email logic here (SMTP or any alerting tool in use)
+    print(alert_message)
 
-    def connect_to_nas(self):
-        """
-        Register a session with the NAS server.
-        """
-        smbclient.register_session(self.host, username=self.username, password=self.password)
-        print(f"Connected to NAS share: \\\\{self.host}\\{self.share}")
+# Parameters (passed by the Databricks job)
+catalog = f"gedp_{os.getenv('ENV')}"
+expected_schemas = os.getenv('EXPECTED_SCHEMAS').split(',')
 
-    def transfer_file_to_nas(self, local_file, remote_file):
-        """
-        Transfer a file to the NAS in 64 KB chunks.
-        """
-        with open(local_file, 'rb') as f:
-            with smbclient.open_file(
-                remote_file, mode='wb', username=self.username, password=self.password
-            ) as remote_fd:
-                chunk_size = 1024 * 64  # 64 KB
-                while chunk := f.read(chunk_size):
-                    remote_fd.write(chunk)
-        print(f"File {os.path.basename(local_file)} transferred to {remote_file} on NAS.")
+# Get existing schemas
+existing_schemas = get_existing_schemas(catalog)
 
-    def transfer_files(self, file_name):
-        """
-        Connect to the NAS and transfer the specified file.
-        """
-        self.connect_to_nas()
-        local_file = os.path.join(self.source_file_path, file_name)
-        remote_file = fr"\\{self.host}\{self.share}\{self.target_directory}\{file_name}"
+# Check for unexpected schemas
+unexpected_schemas = set(existing_schemas) - set(expected_schemas)
 
-        try:
-            self.transfer_file_to_nas(local_file, remote_file)
-            return True
-        except Exception as e:
-            raise Exception(f"Error transferring file to NAS: {str(e)}")
+if unexpected_schemas:
+    send_alert(unexpected_schemas, os.getenv('GEDP_WORKSPACE_ADMIN_EMAILS').split(','))
