@@ -342,3 +342,11 @@ output "schema_list" {
 
   # Extract all schema names into a list
   catalog_schema_names = [for _, schema in local.map_catalog_schemas : schema.schema_name]
+
+
+
+variable "schema_names" {
+  description = "List of schema names from local catalog schema map"
+  type        = list(string)
+  default     = [for _, schema in local.map_catalog_schemas : schema.schema_name]
+}
