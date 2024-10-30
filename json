@@ -1,68 +1,334 @@
-module "check_schemas" {
-  source        = "git::https://github.com/zilvertonz/gedp-databricks-terraform-jobs.git?ref=main"
-  env           = var.env
-  domain_name   = var.domain_name
-  project_name  = var.project_name
-  spark_version = var.spark_version
+locals {
+  alarm_funnel         = ["arn:aws:sns:us-east-1:${var.alarm_funnel_aws_account_number}:cloudwatch-alarm-funnel"]
+  splunk_logging_role  = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/Enterprise/OrgCentralizedLoggingRole"
+  instance_profile_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/MAA-DBRXInstanceSQL"
 
-  jobs = [
-    {
-      job_name     = "gedp_check_schemas_${var.env}"
-      cluster_size = "xs"
-      tasks = [
-        {
-          task_name   = "check_schemas_task"
-          task_source = "${path.module}/artifacts/notebooks/check_schemas.py"
-          task_type   = "NEW_NOTEBOOK"
-          task_params = {
-            env         = var.env
-            expected_schemas = var.expected_schemas_list  # List of expected schemas passed to the job
-          }
-        }
-      ]
+  day                                            = var.env == "prod" ? "L" : var.env == "test" ? "L-1" : "L-2" // Prod runs on last day of month, test runs on second last day, dev runs on third last day
+  cloudwatch_event_refresh_token_cron_maa_demo   = "cron(00 06 ${local.day} 3,9 ? *)"                          // Runs at 6:00 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_clmfin = "cron(10 06 ${local.day} 3,9 ? *)"                          // Runs at 6:10 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_prov   = "cron(20 06 ${local.day} 3,9 ? *)"                          // Runs at 6:20 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_psmb   = "cron(30 06 ${local.day} 3,9 ? *)"                          // Runs at 6:30 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_cmpreg = "cron(40 06 ${local.day} 3,9 ? *)"                          // Runs at 6:40 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_enrl   = "cron(50 06 ${local.day} 3,9 ? *)"                          // Runs at 6:50 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_trnd   = "cron(00 07 ${local.day} 3,9 ? *)"                          // Runs at 7:00 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_athcln = "cron(10 07 ${local.day} 3,9 ? *)"                          // Runs at 7:10 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_rskadj = "cron(20 07 ${local.day} 3,9 ? *)"                          // Runs at 7:20 AM UTC on last day/second last day/third last day of March and September
+  cloudwatch_event_refresh_token_cron_maa_bm     = "cron(30 07 ${local.day} 3,9 ? *)"                          // Runs at 7:30 AM UTC on last day/second last day/third last day of March and September
+
+
+  databricks_workspace_base_url             = "https://en-ma-analytics-${var.env}.cloud.databricks.com"
+  databricks_unity_catalog_name             = lower("maa_${var.env}")
+  external_location_raw_external            = lower("maa_raw_external_${var.env}")
+  external_location_raw_internal            = lower("maa_raw_internal_${var.env}")
+  external_location_artifactory             = lower("artifactory_external_location_${var.env}")
+  external_location_integrated              = lower("integrated_external_location_${var.env}")
+  external_location_purpose                 = lower("purpose_external_location_${var.env}")
+  schema_name_rawz                          = "${local.databricks_unity_catalog_name}.maa_rawz"
+  schema_name_cnfz                          = "${local.databricks_unity_catalog_name}.maa_cnfz"
+  schema_name_pubz                          = "${local.databricks_unity_catalog_name}.maa_pubz"
+  schema_name_rawz_view                     = "${local.databricks_unity_catalog_name}.maa_rawz_v"
+  schema_name_cnfz_view                     = "${local.databricks_unity_catalog_name}.maa_cnfz_v"
+  schema_name_pubz_view                     = "${local.databricks_unity_catalog_name}.maa_pubz_v"
+  schema_name_business_mart_analytics_work  = "${local.databricks_unity_catalog_name}.maa_analytics_work"
+  schema_name_business_mart_preenv          = lower("${local.databricks_unity_catalog_name}.maa_bizmart_pre${var.env}")
+  schema_name_business_mart_env             = lower("${local.databricks_unity_catalog_name}.maa_bizmart_${var.env}")
+  schema_name_business_mart_semantic_preenv = lower("${local.databricks_unity_catalog_name}.maa_bizmart_semantic_pre${var.env}")
+  schema_name_business_mart_semantic_env    = lower("${local.databricks_unity_catalog_name}.maa_bizmart_semantic_${var.env}")
+  schema_name_business_mart_dm              = "${local.databricks_unity_catalog_name}.maa_bizmart_dm"
+
+  check_cluster_status_output_table_full = "${local.databricks_unity_catalog_name}.maa_databricks_admin.check_cluster_status_output"
+
+  map_catalog_schemas = {
+    ########################
+    ## Stage/Core Schemas ##
+    ########################
+
+    # Reference Data
+    stage_refdata = {
+      schema_name = "stage_refdata",
+      description = "GEDP Reference Data source stage zone TABLE schema"
+    },
+    stage_refdata_v = {
+      schema_name = "stage_refdata_v",
+      description = "GEDP Reference Data source stage zone VIEW schema"
+    },
+    core_refdata = {
+      schema_name = "core_refdata",
+      description = "GEDP Reference Data source core zone TABLE schema"
+    },
+    core_refdata_v = {
+      schema_name = "core_refdata_v",
+      description = "GEDP Reference Data source core zone VIEW schema"
+    },
+
+    # Salesforce
+    stage_salesforce = {
+      schema_name = "stage_salesforce",
+      description = "GEDP Salesforce source stage zone TABLE schema"
+    },
+    stage_salesforce_v = {
+      schema_name = "stage_salesforce_v",
+      description = "GEDP Salesforce source stage zone VIEW schema"
+    },
+    core_salesforce = {
+      schema_name = "core_salesforce",
+      description = "GEDP Salesforce source core zone TABLE schema"
+    },
+    core_salesforce_v = {
+      schema_name = "core_salesforce_v",
+      description = "GEDP Salesforce source core zone VIEW schema"
+    },
+
+    # GBS Facets
+    stage_gbs_facets = {
+      schema_name = "stage_gbs_facets",
+      description = "GEDP GBS Facets source stage zone TABLE schema"
+    },
+    stage_gbs_facets_v = {
+      schema_name = "stage_gbs_facets_v",
+      description = "GEDP GBS Facets source stage zone VIEW schema"
+    },
+    core_gbs_facets = {
+      schema_name = "core_gbs_facets",
+      description = "GEDP GBS Facets source core zone TABLE schema"
+    },
+    core_gbs_facets_v = {
+      schema_name = "core_gbs_facets_v",
+      description = "GEDP GBS Facets source core zone VIEW schema"
+    },
+
+    # Provider SPayer
+    stage_prov_spayer = {
+      schema_name = "stage_prov_spayer",
+      description = "GEDP Provider SPayer source stage zone TABLE schema"
+    },
+    stage_prov_spayer_v = {
+      schema_name = "stage_prov_spayer_v",
+      description = "GEDP Provider SPayer source stage zone VIEW schema"
+    },
+    core_prov_spayer = {
+      schema_name = "core_prov_spayer",
+      description = "GEDP Provider SPayer source core zone TABLE schema"
+    },
+    core_prov_spayer_v = {
+      schema_name = "core_prov_spayer_v",
+      description = "GEDP Provider SPayer source core zone VIEW schema"
+    },
+
+    # CMS
+    stage_cms = {
+      schema_name = "stage_cms",
+      description = "GEDP CMS source stage zone TABLE schema"
+    },
+    stage_cms_v = {
+      schema_name = "stage_cms_v",
+      description = "GEDP CMS source stage zone VIEW schema"
+    },
+    core_cms = {
+      schema_name = "core_cms",
+      description = "GEDP CMS source core zone TABLE schema"
+    },
+    core_cms_v = {
+      schema_name = "core_cms_v",
+      description = "GEDP CMS source core zone VIEW schema"
+    },
+
+    ######################
+    ## Datamart Schemas ##
+    ######################
+
+    # Appeals/Grievances domain
+    datamart_appeal_grv = {
+      schema_name = "datamart_appeal_grv",
+      description = "GEDP Appeals/Grievances domain Datamart TABLE schema"
+    },
+    datamart_appeal_grv_v = {
+      schema_name = "datamart_appeal_grv_v",
+      description = "GEDP Appeals/Grievances domain Datamart VIEW schema"
+    },
+
+    # Authorization domain
+    datamart_auth = {
+      schema_name = "datamart_auth",
+      description = "GEDP Authorization domain Datamart TABLE schema"
+    },
+    datamart_auth_v = {
+      schema_name = "datamart_auth_v",
+      description = "GEDP Authorization domain Datamart VIEW schema"
+    },
+
+    # Benefit domain
+    datamart_benefit = {
+      schema_name = "datamart_benefit",
+      description = "GEDP Benefit domain Datamart TABLE schema"
+    },
+    datamart_benefit_v = {
+      schema_name = "datamart_benefit_v",
+      description = "GEDP Benefit domain Datamart VIEW schema"
+    },
+
+    # Claims Domain
+    datamart_claim = {
+      schema_name = "datamart_claim",
+      description = "GEDP Claim Domain Datamart TABLE schema"
+    },
+    datamart_claim_v = {
+      schema_name = "datamart_claim_v",
+      description = "GEDP Claim Domain Datamart VIEW schema"
+    },
+
+    # Client Domain
+    datamart_client = {
+      schema_name = "datamart_client",
+      description = "GEDP Client Domain Datamart TABLE schema"
+    },
+    datamart_client_v = {
+      schema_name = "datamart_client_v",
+      description = "GEDP Client Domain Datamart VIEW schema"
+    },
+
+    # Clinical Domain
+    datamart_clinical = {
+      schema_name = "datamart_clinical",
+      description = "GEDP Clinical Domain Datamart TABLE schema"
+    },
+    datamart_clinical_v = {
+      schema_name = "datamart_clinical_v",
+      description = "GEDP Clinical Domain Datamart VIEW schema"
+    },
+
+    # Financial Domain
+    datamart_financial = {
+      schema_name = "datamart_financial",
+      description = "GEDP Financial Domain Datamart TABLE schema"
+    },
+    datamart_financial_v = {
+      schema_name = "datamart_financial_v",
+      description = "GEDP Financial Domain Datamart VIEW schema"
+    },
+
+    # Member Domain
+    datamart_member = {
+      schema_name = "datamart_member",
+      description = "GEDP Member Domain Datamart TABLE schema"
+    },
+    datamart_member_v = {
+      schema_name = "datamart_member_v",
+      description = "GEDP Member Domain Datamart VIEW schema"
+    },
+
+    # Provider Domain  domain
+    datamart_provider = {
+      schema_name = "datamart_provider",
+      description = "GEDP Provider Domain Datamart TABLE schema"
+    },
+    datamart_provider_v = {
+      schema_name = "datamart_provider_v",
+      description = "GEDP Provider Domain Datamart VIEW schema"
+    },
+
+    # Reference domain
+    datamart_refdata = {
+      schema_name = "datamart_refdata",
+      description = "GEDP Reference Datamart TABLE schema"
+    },
+    datamart_refdata_v = {
+      schema_name = "datamart_refdata_v",
+      description = "GEDP Reference Datamart VIEW schema"
+    },
+
+    # Sales Domain
+    datamart_sales = {
+      schema_name = "datamart_sales",
+      description = "GEDP Sales Domain Datamart TABLE schema"
+    },
+    datamart_sales_v = {
+      schema_name = "datamart_sales_v",
+      description = "GEDP Sales Domain Datamart VIEW schema"
+    },
+
+    ######################
+    ## Reporting Schema ##
+    ######################
+    reporting = {
+      schema_name = "reporting",
+      description = "GEDP Reporting TABLE schema"
+    },
+    reporting_v = {
+      schema_name = "reporting_v",
+      description = "GEDP Reporting VIEW schema"
+    },
+
+    ########################
+    ## Export Feed Schema ##
+    ########################
+    export_feed = {
+      schema_name = "export_feed",
+      description = "GEDP TABLE schema for data being exposed as external tables"
+    },
+    export_feed_v = {
+      schema_name = "export_feed_v",
+      description = "GEDP VIEW schema for data being exposed as external tables"
+    },
+
+    #########################
+    ## Provisioning Schema ##
+    #########################
+    provisioning = {
+      schema_name = "provisioning",
+      description = "GEDP provisioning TABLE schema"
+    },
+    provisioning_v = {
+      schema_name = "provisioning_v",
+      description = "GEDP provisioning VIEW schema"
+    },
+
+    ###########################
+    ## Business Mart Schemas ##
+    ###########################
+    bizmart_analytics_work = {
+      schema_name = "bizmart_analytics_work",
+      description = "GEDP Business Mart analytics work schema"
+    },
+    bizmart_preprod = {
+      schema_name = "bizmart_pre${var.env}",
+      description = "GEDP Business Mart pre${var.env} schema"
+    },
+    bizmart = {
+      schema_name = "bizmart_${var.env}",
+      description = "GEDP Business Mart schema"
+    },
+    bizmart_semantic_preprod = {
+      schema_name = "bizmart_semantic_pre${var.env}",
+      description = "GEDP Business Mart pre${var.env} semantic layer schema"
+    },
+    bizmart_semantic = {
+      schema_name = "bizmart_semantic_${var.env}",
+      description = "GEDP Business Mart semantic layer schema"
+    },
+    bizmart_dm = {
+      schema_name = "bizmart_dm",
+      description = "GEDP Business Mart datamart VIEW schema"
+    },
+
+    #########################
+    ## Functions & Volumes ##
+    #########################
+    fuctions = {
+      schema_name = "functions",
+      description = "GEDP Databricks User-Defined Functions"
+    },
+    volumes = {
+      schema_name = "volumes",
+      description = "GEDP Databricks Volumes"
+    },
+
+    #######################################
+    ## Databricks Workspace Admin Schema ##
+    #######################################
+    map_databricks_admin = {
+      schema_name = var.workspace_admin_schema,
+      description = "GEDP Databricks Workspace Admin schema"
     }
-  ]
-
-  schedule = {
-    cron_expression = "0 0 21 ? * * *"  # Run daily at 9 PM New York time
-    timezone_id     = "America/New_York"
-    pause_status    = var.env == "prod" ? "UNPAUSED" : "PAUSED"
-  }
-
-  email_notifications = {
-    on_start   = []
-    on_success = local.gedp_workspace_admin_member_emails
-    on_failure = local.gedp_workspace_admin_member_emails
   }
 }
-
-
-
-
-
-from pyspark.sql import SparkSession
-import smtplib
-import os
-
-def get_existing_schemas(catalog):
-    spark = SparkSession.builder.getOrCreate()
-    query = f"SHOW SCHEMAS IN {catalog}"
-    return [row.schemaName for row in spark.sql(query).collect()]
-
-def send_alert(unexpected_schemas, emails):
-    alert_message = f"Unexpected schemas detected: {', '.join(unexpected_schemas)}"
-    # Sending email logic here (SMTP or any alerting tool in use)
-    print(alert_message)
-
-# Parameters (passed by the Databricks job)
-catalog = f"gedp_{os.getenv('ENV')}"
-expected_schemas = os.getenv('EXPECTED_SCHEMAS').split(',')
-
-# Get existing schemas
-existing_schemas = get_existing_schemas(catalog)
-
-# Check for unexpected schemas
-unexpected_schemas = set(existing_schemas) - set(expected_schemas)
-
-if unexpected_schemas:
-    send_alert(unexpected_schemas, os.getenv('GEDP_WORKSPACE_ADMIN_EMAILS').split(','))
