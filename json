@@ -332,3 +332,13 @@ locals {
     }
   }
 }
+
+
+# Expose the list of schema names as output
+output "schema_list" {
+  value = [for schema in databricks_schema.schemas : schema.name]
+}
+
+
+  # Extract all schema names into a list
+  catalog_schema_names = [for _, schema in local.map_catalog_schemas : schema.schema_name]
