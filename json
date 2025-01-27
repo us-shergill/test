@@ -1,6 +1,3 @@
-09:21:24  Error: Variables not allowed
-09:21:24  
-09:21:24    on _variables.tf line 337, in variable "expected_schemas_list":
-09:21:24   337:   default     = [for _, schema in local.map_catalog_schemas : schema.schema_name]
-09:21:24  
-09:21:24  Variables may not be used here.
+Currently we have no plan for disaster recovery in our MAA Databricks Platform, meaning that if our catalog data in S3 was maliciously or accidentally deleted, we would have to regenerate all of the data from scratch. 
+
+As such, we need to design and implement a plan that will allow us to recover quickly from this scenario.
