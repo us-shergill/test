@@ -1,85 +1,19 @@
-In our MAA Databricks Platform, we have provisioned the Business Mart Service principal (and our own internal team) with access to create schemas in the gedp_{env} catalog. They need this access to support their deployment and testing process. 
+21117: Array(49), 83704: Array(49), 93454: Array(49)}
+writeToExcel.ts:81
 
-However, provisioning this access now allows for the possibilities of junk schemas being created and not properly deleted. As such, in order to ensure that this is properly governed, we need to create a databricks job and accompanying alert that will run periodically to check the gedp_{env} catalog for the existence of any unexpected schemas.
+Working on file: 21117
+writeToExcel.ts:37
 
-This story will capture the analysis portion of this work, and another story wil be created to track the development work.
+10 Pharmacies Detected.
+writeToExcel.ts:307
 
-I had discussion with Cody on the design
+ An error occurred while combining output:  
+combineAndExport.ts:27
 
-We will create a databricks job in gedp-databricks-infra repo that gets passed the output of the terraform list of expected schemas as a parameter 
 
-Example Databricks Job Terraform code to use as reference: https://github.com/zilvertonz/gedp-databricks-infra/blob/develop/module/databricks/ws_admin/dbx_job_enable_compute.tf
-We can run the job daily to flag any schemas not expected and sent to 
-
-gedp_workspace_admin_member_emails
-
-# GEDP Domain/DM/Admin Schemas
-resource "databricks_schema" "gedp_catalog_schemas" {
-  catalog_name = local.gedp_catalog.name
-  for_each     = local.gedp_catalog_schemas
-  name         = each.value["schema_name"]
-  comment      = each.value["description"]
-}
-
-# GEDP Secure Data Team Schemas
-resource "databricks_schema" "gedp_catalog_schemas" {
-  catalog_name = local.gedp_catalog.name
-  for_each     = { for config in local.secure_data_teams_with_sp : config.TeamName => config if config.CreateTeamSchema }
-  name         = each.key
-  owner        = each.value.SpAppId
-  comment      = "Schema for Secure Data Team ${each.key}"
-}
-
-----------------------------------------
-
-module "enable_compute" {                                                                          #INIT-module
-  source        = "git::https://github.com/zilvertonz/gedp-databricks-terraform-jobs.git?ref=main" ## Set to the tag that you need
-  env           = var.env
-  domain_name   = var.domain_name
-  project_name  = var.project_name
-  spark_version = var.spark_version
-  depends_on    = [aws_ssm_parameter.admin_cluster_policy_id]
-  jobs = [
-    {
-      job_name       = "gedp_workspace_admin_${var.env}_enable_compute" #INIT-job_name
-      cluster_size   = "xs"
-      spark_conf     = var.default_spark_conf
-      spark_env_vars = { ENV = var.env }
-      tasks = [
-        {
-          task_name   = "enable_compute"                                                  #INIT-task_name
-          task_source = "${path.module}/artifacts/notebooks/enable_or_disable_compute.py" #INIT-task_source
-          task_type : "NEW_NOTEBOOK"
-          task_params = {
-            env : var.env,
-            enable_or_disable : "enable",
-            sql_warehouse_names : local.sql_warehouses_for_business_hours,
-            cluster_names : local.clusters_for_business_hours,
-            databricks_workspace_base_url : local.gedp_workspace_host
-          }
-          depends_on = []
-        }
-      ]
-    }
-  ]
-  cluster_libraries       = []
-  cluster_s3_init_scripts = []
-  pip_libraries           = ["requests"]
-  timeout                 = "3600" ## Optional
-  required_tags = merge(local.required_dbx_tags, {
-    UsesTDVJDBC = "NO" # Denote whether or not this job uses JDBC to connect to Terradata. Used for tracking purposes. Options are "YES" or "NO"
-  })
-  optional_tags = {}
-
-  schedule = {
-    cron_expression = "0 0 21 ? * * *",                         ## Quartz Cron Expression Syntax
-    timezone_id     = "America/New_York",                       ## Java TimeZone format
-    pause_status    = var.env == "prod" ? "UNPAUSED" : "PAUSED" ## Options are PAUSED/UNPAUSED
-  }
-
-  email_notifications = {
-    on_start   = []
-    on_success = local.gedp_workspace_admin_member_emails
-    on_failure = local.gedp_workspace_admin_member_emails
-  }
-}
+TypeError: Cannot read properties of null (reading 'substring')
+    at outputToExcel (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:318:109)
+    at combineAndExport (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:19:15)
+    at process.processTicksAndRejections (/Users/c8r6kn/git/hc-gov-tsprices/lib/internal/process/task_queues.js:95:5)
+    at async combine (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/combineAndExport.ts:17:5)
+    at async tryCombine (/Users/c8r6kn/git/hc-gov-tsprices/bin/src/utilities/combineAndExport.js:44:24) {stack: 'TypeError: Cannot read properties of null (re…/bin/src/utilities/combineAndExport.js:44:24)', message: "Cannot read properties of null (reading 'substring')"}
