@@ -1,19 +1,8 @@
-21117: Array(49), 83704: Array(49), 93454: Array(49)}
-writeToExcel.ts:81
-
-Working on file: 21117
-writeToExcel.ts:37
-
-10 Pharmacies Detected.
-writeToExcel.ts:307
-
- An error occurred while combining output:  
-combineAndExport.ts:27
-
-
-TypeError: Cannot read properties of null (reading 'substring')
-    at outputToExcel (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:318:109)
-    at combineAndExport (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:19:15)
-    at process.processTicksAndRejections (/Users/c8r6kn/git/hc-gov-tsprices/lib/internal/process/task_queues.js:95:5)
-    at async combine (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/combineAndExport.ts:17:5)
-    at async tryCombine (/Users/c8r6kn/git/hc-gov-tsprices/bin/src/utilities/combineAndExport.js:44:24) {stack: 'TypeError: Cannot read properties of null (re…/bin/src/utilities/combineAndExport.js:44:24)', message: "Cannot read properties of null (reading 'substring')"}
+var mailText = worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value;
+if (mailText != null && typeof mailText === 'string') {
+    mailText = mailText.substring(0, 100); // Only substring if it's a string
+    var mailValue: number = +mailText; // Convert to number
+} else {
+    console.warn(`Cell at (${rowNum}, ${colNum}) has an invalid or empty value.`);
+    var mailValue: number = 0; // Handle the case where value is null or invalid
+}
