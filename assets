@@ -1,71 +1,61 @@
-sers/c8r6kn/.nvs/node/20.9.0/arm64/bin/node ./bin/src/utilities/combineAndExport.js
-Combining results 
-combineAndExport.ts:22
-Output path determined as: /Users/c8r6kn/git/hc-gov-tsprices/output
-combineAndExport.ts:14
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_0_to_20_phrm_0_to_1.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_81_to_100_phrm_4_to_7.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_0_to_20_phrm_0_to_1.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_0_to_20_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_0_to_20_phrm_0_to_3.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_0_to_20_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_0_to_20_phrm_0_to_3.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_101_to_120_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_0_to_20_phrm_4_to_7.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_101_to_120_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_0_to_20_phrm_4_to_7.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_121_to_140_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_101_to_120_phrm_0_to_1.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_121_to_140_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_101_to_120_phrm_0_to_1.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_141_to_160_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_101_to_120_phrm_0_to_3.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_141_to_160_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_101_to_120_phrm_0_to_3.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_161_to_180_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_101_to_120_phrm_4_to_7.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_161_to_180_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_101_to_120_phrm_4_to_7.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_181_to_200_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_121_to_140_phrm_0_to_1.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_181_to_200_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_121_to_140_phrm_0_to_1.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_21_to_40_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_121_to_140_phrm_0_to_3.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_21_to_40_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_121_to_140_phrm_0_to_3.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_41_to_60_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_121_to_140_phrm_4_to_7.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_41_to_60_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_121_to_140_phrm_4_to_7.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_61_to_80_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_141_to_160_phrm_0_to_1.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_61_to_80_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_141_to_160_phrm_0_to_1.log
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_81_to_100_phrm_0_to_3.csv
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_141_to_160_phrm_0_to_3.csv
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_81_to_100_phrm_0_to_3.log
 fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_141_to_160_phrm_0_to_3.log
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_141_to_160_phrm_4_to_7.csv
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_141_to_160_phrm_4_to_7.log
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_1.csv
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_1.html
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_1.jpg
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_1.log
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_3.csv
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_3.html
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_3.jpg
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_0_to_3.log
-fileManager.ts:103
-/Users/c8r6kn/git/hc-gov-tsprices/output/21117_market_161_to_180_phrm_4_to_7.csv
-fileManager.ts:103
+Grouped Files Detected:
+writeToExcel.ts:80
+{21117: Array(49), 83704: Array(49), 93454: Array(49)}
+writeToExcel.ts:81
+Working on file: 21117
+writeToExcel.ts:37
+10 Pharmacies Detected.
+writeToExcel.ts:307
+ An error occurred while combining output:  
+combineAndExport.ts:27
+TypeError: Cannot read properties of null (reading 'substring')
+    at outputToExcel (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:318:109)
+    at combineAndExport (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:19:15)
+    at process.processTicksAndRejections (/Users/c8r6kn/git/hc-gov-tsprices/lib/internal/process/task_queues.js:95:5)
+    at async combine (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/combineAndExport.ts:17:5)
+    at async tryCombine (/Users/c8r6kn/git/hc-gov-tsprices/bin/src/utilities/combineAndExport.js:44:24) {stack: 'TypeError: Cannot read properties of null (re…/bin/src/utilities/combineAndExport.js:44:24)', message: "Cannot read properties of null (reading 'substring')"}
+
+combineAndExport.ts:28
+Process exited with code 1
