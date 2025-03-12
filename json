@@ -1,97 +1,339 @@
-Here’s a breakdown of the work into **user stories for a biweekly sprint**, considering that **S3 versioning might already be in place**. The goal is to prioritize tasks that can be completed within one sprint while ensuring meaningful progress toward the Disaster Recovery (DR) plan.
+import * as fs from 'fs';
+import * as path from 'path';
+import * as glob from 'glob';
+import { readCsv } from './fileManager';
+const csv = require('csvtojson');
+const Exceljs = require('exceljs');
 
----
+export async function combineAndExport(fullPathOut) {
+    const grps = await getFilePathGroups(fullPathOut);
+    
+    // For each group (keyed by zip)
+    for (const g of Object.keys(grps)) {
+        let flattenedZipDataObjects = await flattenFileGroup(grps[g]);
+        let flatFilePath = await writeToFile(g, flattenedZipDataObjects);
+        let fileName = g;
+        let zip = fileName.split("_")[0];
+        
+        await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects);
+    }
+}
 
-### **Sprint Goal:**  
-_“Establish a foundational Disaster Recovery strategy by assessing current infrastructure, automating critical backup processes, and enhancing access controls.”_
+/**
+ * Groups CSV files in `fullPathOut` by zip code prefix in filename.
+ */
+export async function getFilePathGroups(fullPathOut) {
+    let pattern = `${fullPathOut}/*.csv`;
+    const csvDataFiles = glob.sync(pattern);
 
----
+    let groupGlobs: string[] = [];
+    let groupedFiles: Record<string, string[]> = {};
 
-### **Story 1: Assess Current State and Define Recovery Objectives**  
-- **Description:** Review the current Databricks-S3 setup and define recovery objectives.  
-- **Tasks:**  
-  - [ ] Review existing DR practices (if any)  
-  - [ ] Define RTO and RPO for critical workloads  
-  - [ ] Identify critical data in S3 (catalog data, Delta tables, metadata)  
-  - [ ] Document key service dependencies (IAM roles, networking)  
-- **Estimated Effort:** 3 Story Points  
+    // Identify unique zip codes (everything before first underscore)
+    csvDataFiles.forEach(nm => {
+        let zipCode = path.basename(nm).split('_')[0]; 
+        if (!groupGlobs.includes(zipCode)) {
+            groupGlobs.push(zipCode);
+        }
+    });
 
----
+    // For each zip code, find matching CSV files and sort them
+    groupGlobs.forEach(glb => {
+        pattern = `${fullPathOut}/${glb}*.csv`;
+        groupedFiles[glb] = glob.sync(pattern).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    });
 
-### **Story 2: Verify and Document Existing S3 Versioning**  
-- **Description:** Since versioning might already exist, verify its configuration and ensure lifecycle policies are optimized.  
-- **Tasks:**  
-  - [ ] Audit current S3 versioning setup  
-  - [ ] Review lifecycle policies for cost optimization  
-  - [ ] Document versioning status and gaps (if any)  
-- **Estimated Effort:** 2 Story Points  
+    console.log("Grouped Files Detected:", groupedFiles);
+    return groupedFiles;
+}
 
----
+/**
+ * Flattens all files for a single zip group into a single combined data array.
+ */
+export async function flattenFileGroup(fileGroupList) {
+    let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList);
+    return flattenZipData(zipGroupSortedObjects);
+}
 
-### **Story 3: Implement Cross-Region Replication (CRR)**  
-- **Description:** Set up CRR for critical S3 buckets to a secondary AWS region for redundancy.  
-- **Tasks:**  
-  - [ ] Identify critical buckets for replication  
-  - [ ] Configure CRR (preferably using a separate AWS account for destination)  
-  - [ ] Validate replication with test data  
-- **Estimated Effort:** 5 Story Points  
+/**
+ * Reads CSV data for each file, combines into single array, and sorts.
+ */
+export async function combineAndSortFileGroupData(fileGroupList) {
+    let zipData = [];
+    for (const fileName of fileGroupList) {
+        let fileData = await readCsv(fileName);
+        zipData.push(...fileData);
+    }
 
----
+    // Example sort logic: drugCategory -> brandGenericFlag -> rank -> drugName -> planId
+    zipData.sort((a, b) => (
+        a.drugCategory.localeCompare(b.drugCategory) ||
+        a.brandGenericFlag.localeCompare(b.brandGenericFlag) ||
+        a.rank - b.rank ||
+        a.drugName.localeCompare(b.drugName) ||
+        a.planId.localeCompare(b.planId)
+    ));
 
-### **Story 4: Automate Backups for S3 Using AWS Backup**  
-- **Description:** Automate backups for S3 buckets to enhance data durability.  
-- **Tasks:**  
-  - [ ] Configure AWS Backup for selected S3 buckets  
-  - [ ] Define backup schedules and retention policies  
-  - [ ] Test automated backups and validate data recovery  
-- **Estimated Effort:** 5 Story Points  
+    return zipData;
+}
 
----
+/**
+ * Converts the combined objects into a 2D array of [ [header, value], ... ].
+ */
+export function flattenZipData(zipData) {
+    let flattenedZipData = [];
+    
+    zipData.forEach(priceObjct => {
+        let found = flattenedZipData.find(objct => 
+            objct[0][1] == priceObjct.rank &&
+            objct[1][1] == priceObjct.drugCategory &&
+            objct[2][1] == priceObjct.drugName &&
+            objct[3][1] == priceObjct.quantity
+        );
 
-### **Story 5: Implement Access Controls for S3 and Databricks**  
-- **Description:** Strengthen data protection through IAM policies and Databricks access controls.  
-- **Tasks:**  
-  - [ ] Review current IAM policies for S3  
-  - [ ] Apply least privilege principles where needed  
-  - [ ] Configure Databricks access controls to restrict data modifications  
-- **Estimated Effort:** 3 Story Points  
+        if (found) {
+            // Add new plan column to existing drug row
+            found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]);
+        } else {
+            // Create new row
+            flattenedZipData.push([
+                ['Rank', priceObjct.rank],
+                ['Drug Category', priceObjct.drugCategory],
+                ['Drug', priceObjct.drugName],
+                ['Quantity', priceObjct.quantity],
+                ['Refill Frequency', '30'],
+                ['Package Option', priceObjct.packageOption],
+                ['Brand or Generic', priceObjct.brandGenericFlag],
+                [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
+            ]);
+        }
+    });
 
----
+    return flattenedZipData;
+}
 
-### **Story 6: Design Basic Disaster Recovery (DR) Playbooks**  
-- **Description:** Create initial recovery procedures for data deletion and Databricks workspace recovery.  
-- **Tasks:**  
-  - [ ] Draft recovery steps for S3 data deletion using versioning  
-  - [ ] Outline recovery steps for Databricks workspace failures  
-  - [ ] Identify any automation gaps  
-- **Estimated Effort:** 3 Story Points  
+/**
+ * Writes flattened data to a single CSV file for the zip code.
+ */
+export async function writeToFile(fileName, flattenedZipDataObjects) {
+    const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`);
+    console.log(`Working on file: ${fileName}`);
 
----
+    // Remove existing file (if any)
+    try { 
+        fs.unlinkSync(reportFile); 
+    } catch (e) {
+        // ignore file-not-found, etc.
+    }
 
-### **Story 7: Automate S3 Data Recovery Using AWS Lambda**  
-- **Description:** Automate data recovery for S3 using Lambda functions.  
-- **Tasks:**  
-  - [ ] Develop Lambda functions for object restoration  
-  - [ ] Test Lambda recovery in a controlled environment  
-  - [ ] Document the automation process  
-- **Estimated Effort:** 5 Story Points  
+    // First line of CSV is the headers
+    let header = `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`;
+    let lines = [header];
 
----
+    // Each subsequent line is the row data
+    flattenedZipDataObjects.forEach(line => {
+        let fullLine = line
+            .map(row => (row[1] ?? "").toString().replace(/,/g, ''))
+            .join(',');
+        lines.push(`${fullLine}\n`);
+    });
 
-### **Story 8: DR Documentation and Knowledge Sharing**  
-- **Description:** Create DR documentation and conduct a knowledge-sharing session with the team.  
-- **Tasks:**  
-  - [ ] Document current DR configurations and playbooks  
-  - [ ] Organize a session to discuss DR objectives and processes  
-- **Estimated Effort:** 2 Story Points  
+    fs.writeFileSync(reportFile, lines.join(''));
 
----
+    return reportFile;
+}
 
-### **Sprint Summary:**
-- **Total Estimated Story Points:** ~28  
-- **Focus Areas:** Assessment, Automation, Backup Configuration, Access Control, Documentation  
-- **Dependencies:** Coordination with the infrastructure and security teams  
+/**
+ * Generates an Excel file using ExcelJS with 3-line plan columns restored.
+ */
+export async function outputToExcel(fullPathOut, filename, flatFilePath, zipCode, flattenedZipDataObjects) {
+    let xlfileName = path.join(fullPathOut, `${filename}_xl_file.xlsx`);
 
----
+    // Create workbook & sheet
+    let workbook = new Exceljs.Workbook();
+    let worksheet = workbook.addWorksheet("New Sheet");
 
-Let me know if you'd like adjustments to the estimates or additional stories included.
+    // 1) Configure columns: each subarray => row[0] is the header, row[1] is the value
+    worksheet.columns = flattenedZipDataObjects[0].map(row => ({
+        header: row[0],
+        key: row[0]  // e.g. 'S5617-214-0_Cigna...(etc)'
+    }));
+
+    // 2) Add all row data
+    worksheet.addRows(flattenedZipDataObjects.map(row => row.map(data => data[1])));
+
+    // Optional: Some row formatting
+    worksheet.properties.defaultColWidth = 10;
+    worksheet.properties.defaultCellWidth = 10;
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(2).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(1).height = 35;
+    worksheet.getRow(2).height = 35;
+    worksheet.getRow(3).height = 35;
+    worksheet.getRow(1).font = { bold: true, size: 14 };
+    worksheet.getRow(2).font = { bold: true, size: 12 };
+    worksheet.getRow(3).font = { bold: true, size: 12 };
+
+    // Give columns 1..6 some widths
+    worksheet.getColumn(1).width = 8;
+    worksheet.getColumn(2).width = 16;
+    worksheet.getColumn(3).width = 35;
+    worksheet.getColumn(4).width = 9;
+    worksheet.getColumn(5).width = 16;
+    worksheet.getColumn(6).width = 16;
+
+    // Border on rows 1 & 2
+    worksheet.getRow(1).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+    worksheet.getRow(2).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+    // Medium border on the right side of column 7
+    worksheet.getColumn(7).border = {
+        right: { style: 'medium' }
+    };
+
+    // 3) Merge top left for date & zip
+    const zipAndDateCellRange = 'A1:G2';
+    worksheet.mergeCells(zipAndDateCellRange);
+
+    // Insert date
+    const today = new Date();
+    const dateString = `${today.getFullYear()}-${(`0${today.getMonth()+1}`).slice(-2)}-${(`0${today.getDate()}`).slice(-2)}`;
+    worksheet.getCell('A2').value = `Zip Code: ${zipCode} \n Report Date: ${dateString}`;
+
+    // 4) Restore the 3-line plan columns:
+    //    - Row 1: "Plan Name: X"
+    //    - Row 2: "Plan Id: Y"
+    //    - Row 3: "Pharmacy: Z"
+    let firstPlanColumnNum = 7; // columns 1..6 are reserved for base info
+    for (let i = firstPlanColumnNum; i < worksheet._columns.length; i++) {
+        let fullColumn = worksheet._columns[i];
+        if (!fullColumn || !fullColumn.key) continue; // safety check
+
+        // Example key: S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_RITE AID PHARMACY 03871
+        let splitColNm = fullColumn.key.split('_');
+        let planId = splitColNm[0] || "UnknownPlanId";
+        let planName = splitColNm[1] || "UnknownPlanName";
+        let pharmacyName = splitColNm[2] || "UnknownPharmacy";
+
+        // If the planName or pharmacy has underscores, you may need to handle them.
+        // For now, we assume 3 parts.
+
+        let thisColumn = worksheet.getColumn(fullColumn.key);
+
+        // Row 1: Plan Name
+        worksheet.getCell(1, thisColumn.number).value = `Plan Name: ${planName}`;
+        worksheet.getCell(1, thisColumn.number).alignment = { vertical: 'middle', horizontal: 'center' };
+
+        // Row 2: Plan ID
+        worksheet.getCell(2, thisColumn.number).value = `Plan Id: ${planId}`;
+        worksheet.getCell(2, thisColumn.number).alignment = { vertical: 'middle', horizontal: 'center' };
+
+        // Row 3: Pharmacy
+        worksheet.getCell(3, thisColumn.number).value = pharmacyName;
+        worksheet.getCell(3, thisColumn.number).alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getCell(3, thisColumn.number).width = 30;
+    }
+
+    // Merge row 1 and row 2 cells for each plan chunk (like old code)
+    let mergeSpan = 7;  // how many columns per plan chunk
+    let currentColumnNum = worksheet.getCell(1, 8)._column._number; 
+    //  ^ 8 is first plan column + 1, because 1..7 are base columns
+    let lastColumnNumber = worksheet._columns[worksheet._columns.length - 1]?._number || 7;
+
+    while (currentColumnNum + mergeSpan <= lastColumnNumber) {
+        worksheet.mergeCells(1, currentColumnNum, 1, currentColumnNum + mergeSpan);
+        worksheet.mergeCells(2, currentColumnNum, 2, currentColumnNum + mergeSpan);
+        currentColumnNum = currentColumnNum + mergeSpan + 1;
+    }
+
+    // 5) Identify "Mail order pharmacy" columns
+    const columnCount = worksheet.actualColumnCount;
+    const rowCount = worksheet.actualRowCount;
+    let mailOrderCol = 8;
+
+    // For columns 8..N, see which one is labeled "Mail order pharmacy" in row 3
+    for (let col = 8; col <= columnCount; col++) {
+        let cellValue = worksheet.getCell(worksheet.getRow(3).getCell(col)._address).value;
+        let cellText = (cellValue && typeof cellValue === "string")
+            ? cellValue.substring(0, 100)
+            : "";
+
+        if (cellText === 'Mail order pharmacy') {
+            mailOrderCol = col - 7;
+            break;
+        }
+    }
+    console.log(`${mailOrderCol} Pharmacies Detected.`);
+
+    // 6) For each drug row, highlight pharmacy cells that exceed 3x mail order cost
+    let pharmacyCounter = 1;
+    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
+        for (let colNum = 8; colNum <= columnCount; ++colNum) {
+            // If we're at the 'mail order' boundary
+            if ((pharmacyCounter % mailOrderCol) === 0 && colNum !== 8) {
+                // Draw a right border for that column
+                worksheet.getColumn(colNum).border = {
+                    right: { style: 'medium' }
+                };
+                // Retrieve mail order price
+                let mailCellVal = worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value;
+                let mailText = (mailCellVal && typeof mailCellVal === "string")
+                    ? mailCellVal.substring(0, 100)
+                    : "0";
+                let mailValue = parseFloat(mailText) || 0;
+
+                // Compare each pharmacy cell preceding it
+                for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
+                    let pharmAddress = worksheet.getRow(rowNum).getCell(colNum - retroNum)._address;
+                    let pharmCellVal = worksheet.getCell(pharmAddress).value;
+                    let pharmText = (pharmCellVal && typeof pharmCellVal === "string")
+                        ? pharmCellVal.substring(0, 100)
+                        : "0";
+                    let pharmValue = parseFloat(pharmText) || 0;
+
+                    // Highlight if >= 3x mail order cost
+                    if (pharmValue >= (mailValue * 3)) {
+                        worksheet.getCell(pharmAddress).fill = {
+                            type: 'pattern',
+                            pattern: 'solid',
+                            fgColor: { argb: 'FFFB00' }
+                        };
+                    }
+                }
+            }
+            pharmacyCounter++;
+        }
+    }
+
+    // 7) Convert each data cell to a numeric with currency format
+    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
+        for (let colNum = 8; colNum <= columnCount; ++colNum) {
+            let address = worksheet.getRow(rowNum).getCell(colNum)._address;
+            let value = parseFloat(worksheet.getCell(address).value) || 0;
+            worksheet.getCell(address).value = value;
+            worksheet.getCell(address).numFmt = '"$"#,##0.00';
+        }
+    }
+
+    // Give row 3 a bold border on all sides
+    worksheet.getRow(3).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+
+    // 8) Write out the XLSX file
+    await workbook.xlsx.writeFile(xlfileName);
+    return xlfileName;
+}
