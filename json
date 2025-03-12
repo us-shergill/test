@@ -1,13 +1,312 @@
-Grouped Files Detected: {21117: Array(50), 83704: Array(50), 93454: Array(50)}
-writeToExcel.ts:46
- An error occurred while combining output:  
-combineAndExport.ts:27
-TypeError: Cannot read properties of undefined (reading 'localeCompare')
-    at /Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:70:24
-    at Array.sort (<anonymous>)
-    at combineAndSortFileGroupData (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:69:13)
-    at process.processTicksAndRejections (/Users/c8r6kn/git/hc-gov-tsprices/lib/internal/process/task_queues.js:95:5)
-    at async flattenFileGroup (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:54:33)
-    at async combineAndExport (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:13:39)
-    at async combine (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/combineAndExport.ts:17:5)
-    at async tryCombine (/Users/c8r6kn/git/hc-gov-tsprices/bin/src/utilities/combineAndExport.js:44:24) {stack: 'TypeError: Cannot read properties of undefine…/bin/src/utilities/combineAndExport.js:44:24)', message: "Cannot read properties of undefined (reading 'localeCompare')"}
+import * as fs from 'fs';
+import * as path from 'path';
+import * as glob from 'glob';
+import { readCsv } from './fileManager';
+const csv = require('csvtojson');
+const Exceljs = require('exceljs');
+
+export async function combineAndExport(fullPathOut) {
+    const grps = await getFilePathGroups(fullPathOut);
+    
+    for (const g of Object.keys(grps)) {
+        let flattenedZipDataObjects = await flattenFileGroup(grps[g]);
+        let flatFilePath = await writeToFile(g, flattenedZipDataObjects);
+        let fileName = g;
+        let zip = fileName.split("_")[0];
+        
+        await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects);
+    }
+}
+
+/**
+ * Groups CSV files by zip code prefix (everything before first underscore).
+ */
+export async function getFilePathGroups(fullPathOut) {
+    let pattern = `${fullPathOut}/*.csv`;
+    const csvDataFiles = glob.sync(pattern);
+
+    let groupGlobs: string[] = [];
+    let groupedFiles: Record<string, string[]> = {};
+
+    csvDataFiles.forEach(nm => {
+        let zipCode = path.basename(nm).split('_')[0]; 
+        if (!groupGlobs.includes(zipCode)) {
+            groupGlobs.push(zipCode);
+        }
+    });
+
+    groupGlobs.forEach(glb => {
+        pattern = `${fullPathOut}/${glb}*.csv`;
+        groupedFiles[glb] = glob.sync(pattern)
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    });
+
+    console.log("Grouped Files Detected:", groupedFiles);
+    return groupedFiles;
+}
+
+/**
+ * Flattens the CSV data from multiple files into one array.
+ */
+export async function flattenFileGroup(fileGroupList) {
+    let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList);
+    return flattenZipData(zipGroupSortedObjects);
+}
+
+/**
+ * Reads CSV data for each file, combines, then sorts with safe fallback for missing fields.
+ */
+export async function combineAndSortFileGroupData(fileGroupList) {
+    let zipData = [];
+
+    for (const fileName of fileGroupList) {
+        let fileData = await readCsv(fileName);
+        zipData.push(...fileData);
+    }
+
+    // Safe string helper to avoid undefined errors in localeCompare
+    const safeStr = (val: any) => (typeof val === 'string' ? val : '');
+
+    // Example sort logic: drugCategory -> brandGenericFlag -> rank -> drugName -> planId
+    zipData.sort((a, b) => (
+        safeStr(a.drugCategory).localeCompare(safeStr(b.drugCategory)) ||
+        safeStr(a.brandGenericFlag).localeCompare(safeStr(b.brandGenericFlag)) ||
+        (a.rank - b.rank) ||
+        safeStr(a.drugName).localeCompare(safeStr(b.drugName)) ||
+        safeStr(a.planId).localeCompare(safeStr(b.planId))
+    ));
+
+    return zipData;
+}
+
+/**
+ * Converts the combined objects into a 2D array: [ [header, value], ... ].
+ */
+export function flattenZipData(zipData) {
+    let flattenedZipData = [];
+    
+    zipData.forEach(priceObjct => {
+        let found = flattenedZipData.find(objct => 
+            objct[0][1] == priceObjct.rank &&
+            objct[1][1] == priceObjct.drugCategory &&
+            objct[2][1] == priceObjct.drugName &&
+            objct[3][1] == priceObjct.quantity
+        );
+
+        if (found) {
+            found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]);
+        } else {
+            flattenedZipData.push([
+                ['Rank', priceObjct.rank],
+                ['Drug Category', priceObjct.drugCategory],
+                ['Drug', priceObjct.drugName],
+                ['Quantity', priceObjct.quantity],
+                ['Refill Frequency', '30'],
+                ['Package Option', priceObjct.packageOption],
+                ['Brand or Generic', priceObjct.brandGenericFlag],
+                [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
+            ]);
+        }
+    });
+
+    return flattenedZipData;
+}
+
+/**
+ * Writes flattened data to a single CSV file for each zip code.
+ */
+export async function writeToFile(fileName, flattenedZipDataObjects) {
+    const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`);
+    console.log(`Working on file: ${fileName}`);
+
+    try {
+        fs.unlinkSync(reportFile);
+    } catch (e) {
+        // Ignore if file doesn't exist
+    }
+
+    // First line is the list of headers
+    let header = `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`;
+    let lines = [header];
+
+    // Then each row of data
+    flattenedZipDataObjects.forEach(line => {
+        let fullLine = line.map(row => 
+            row[1]?.toString().replace(/,/g, '') || ""
+        ).join(',');
+        lines.push(`${fullLine}\n`);
+    });
+
+    fs.writeFileSync(reportFile, lines.join(''));
+    return reportFile;
+}
+
+/**
+ * Creates an Excel file with the triple-line header format (Plan Name, Plan ID, Pharmacy).
+ */
+export async function outputToExcel(fullPathOut, filename, flatFilePath, zipCode, flattenedZipDataObjects) {
+    let xlfileName = path.join(fullPathOut, `${filename}_xl_file.xlsx`);
+    let workbook = new Exceljs.Workbook();
+    let worksheet = workbook.addWorksheet("New Sheet");
+
+    // Columns set based on the first row of data
+    worksheet.columns = flattenedZipDataObjects[0].map(row => ({
+        header: row[0],
+        key: row[0]
+    }));
+
+    // Insert all row data
+    worksheet.addRows(
+        flattenedZipDataObjects.map(row => row.map(data => data[1]))
+    );
+
+    // We’ll restore the “3-line plan columns” from your previous code
+    // 1) Basic styling
+    worksheet.properties.defaultColWidth = 10;
+    worksheet.properties.defaultCellWidth = 10;
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(2).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(1).height = 35;
+    worksheet.getRow(2).height = 35;
+    worksheet.getRow(3).height = 35;
+    worksheet.getRow(1).font = { bold: true, size: 14 };
+    worksheet.getRow(2).font = { bold: true, size: 12 };
+    worksheet.getRow(3).font = { bold: true, size: 12 };
+    worksheet.getRow(1).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+    worksheet.getRow(2).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+    worksheet.getColumn(7).border = {
+        right: { style: 'medium' }
+    };
+
+    // 2) Merge top-left for ZIP & date (A1:G2)
+    const zipAndDateCellRange = 'A1:G2';
+    worksheet.mergeCells(zipAndDateCellRange);
+
+    const today = new Date();
+    const dateString = `${today.getFullYear()}-${(`0${today.getMonth()+1}`).slice(-2)}-${(`0${today.getDate()}`).slice(-2)}`;
+    worksheet.getCell('A2').value = `Zip Code: ${zipCode} \n Report Date: ${dateString}`;
+
+    // 3) Split planName, planId, pharmacy into row1, row2, row3
+    let firstPlanColumnNum = 7;  // columns 1..6 are for rank, drug, etc.
+    for (let i = firstPlanColumnNum; i < worksheet._columns.length; i++) {
+        let fullColumn = worksheet._columns[i];
+        if (!fullColumn || !fullColumn.key) continue;
+
+        // E.g. "S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_RITE AID PHARMACY 03871"
+        let splitCol = fullColumn.key.split('_');
+        let planId = splitCol[0] || "UnknownPlanId";
+        let planName = splitCol[1] || "UnknownPlanName";
+        let pharmacyName = splitCol[2] || "UnknownPharmacy";
+        // If your data might have more underscores, adapt accordingly.
+
+        let thisColumn = worksheet.getColumn(fullColumn.key);
+
+        // Row 1: Plan Name
+        worksheet.getCell(1, thisColumn.number).value = `Plan Name: ${planName}`;
+        worksheet.getCell(1, thisColumn.number).alignment = { vertical: 'middle', horizontal: 'center' };
+        // Row 2: Plan ID
+        worksheet.getCell(2, thisColumn.number).value = `Plan Id: ${planId}`;
+        worksheet.getCell(2, thisColumn.number).alignment = { vertical: 'middle', horizontal: 'center' };
+        // Row 3: Pharmacy
+        worksheet.getCell(3, thisColumn.number).value = pharmacyName;
+        worksheet.getCell(3, thisColumn.number).alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getCell(3, thisColumn.number).width = 30;
+    }
+
+    // 4) Merge row1 & row2 for each plan chunk (7 columns wide)
+    let mergeSpan = 7;
+    let currentColumnNum = worksheet.getCell(1, 8)._column._number; 
+    //   ^ 8 is the first plan column + 1 
+    let lastColumnNumber = worksheet._columns[worksheet._columns.length - 1]?._number || 7;
+
+    while (currentColumnNum + mergeSpan <= lastColumnNumber) {
+        worksheet.mergeCells(1, currentColumnNum, 1, currentColumnNum + mergeSpan);
+        worksheet.mergeCells(2, currentColumnNum, 2, currentColumnNum + mergeSpan);
+        currentColumnNum += (mergeSpan + 1);
+    }
+
+    // 5) Identify how many pharmacies between each "Mail order pharmacy"
+    const columnCount = worksheet.actualColumnCount;
+    const rowCount = worksheet.actualRowCount;
+    let mailOrderCol = 8;
+
+    // Check row 3 for "Mail order pharmacy"
+    for (let col = 8; col <= columnCount; col++) {
+        let cellVal = worksheet.getCell(worksheet.getRow(3).getCell(col)._address).value;
+        let cellText = (cellVal && typeof cellVal === "string") ? cellVal.substring(0, 100) : "";
+        if (cellText === 'Mail order pharmacy') {
+            mailOrderCol = col - 7;
+            break;
+        }
+    }
+    console.log(`${mailOrderCol} Pharmacies Detected.`);
+
+    // 6) Highlight any pharmacy cost >= 3x mail order pharmacy cost
+    let pharmacyCounter = 1;
+    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
+        for (let colNum = 8; colNum <= columnCount; ++colNum) {
+            if ((pharmacyCounter % mailOrderCol) === 0 && colNum !== 8) {
+                // Add a style border
+                worksheet.getColumn(colNum).border = {
+                    right: { style: 'medium' }
+                };
+
+                // Get mail order cost
+                let mailCellVal = worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value;
+                let mailText = (mailCellVal && typeof mailCellVal === "string") ? mailCellVal.substring(0, 100) : "0";
+                let mailValue = parseFloat(mailText) || 0;
+
+                // Compare for each preceding pharmacy
+                for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
+                    let pharmAddress = worksheet.getRow(rowNum).getCell(colNum - retroNum)._address;
+                    let pharmCellVal = worksheet.getCell(pharmAddress).value;
+                    let pharmText = (pharmCellVal && typeof pharmCellVal === "string") ? pharmCellVal.substring(0, 100) : "0";
+                    let pharmValue = parseFloat(pharmText) || 0;
+
+                    // Highlight if >= 3x mail order
+                    if (pharmValue >= (mailValue * 3)) {
+                        worksheet.getCell(pharmAddress).fill = {
+                            type: 'pattern',
+                            pattern: 'solid',
+                            fgColor: { argb: 'FFFB00' }
+                        };
+                    }
+                }
+            }
+            pharmacyCounter++;
+        }
+    }
+
+    // 7) Convert each cell in plan columns to number with currency format
+    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
+        for (let colNum = 8; colNum <= columnCount; ++colNum) {
+            let address = worksheet.getRow(rowNum).getCell(colNum)._address;
+            let numericVal = parseFloat(worksheet.getCell(address).value) || 0;
+            worksheet.getCell(address).value = numericVal;
+            worksheet.getCell(address).numFmt = '"$"#,##0.00';
+        }
+    }
+
+    // Bold border on row 3
+    worksheet.getRow(3).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+
+    // 8) Write final XLSX
+    await workbook.xlsx.writeFile(xlfileName);
+    return xlfileName;
+}
