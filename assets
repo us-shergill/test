@@ -1,553 +1,70 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as glob from 'glob';
-import * as os from 'os';
-import { readCsv } from './fileManager';
-const csv = require('csvtojson');
-const Exceljs = require('exceljs');
+Understood. Here is a **clean, professional version** of **Step 1 and Step 2**, along with a brief introduction and permission requirements — formatted for internal documentation or a wiki page. It avoids emojis and informal markers like green checks.
 
+---
 
-export async function combineAndExport(fullPathOut) {
-    const grps = await getFilePathGroups(fullPathOut);
-    let flatFilePath
-    // for each zip grouping (ie for each zipcode) files are combined and written as one flat csv file per zip 
-    for (const g of Object.keys(grps)) {
-        let flattenedZipDataObjects = await flattenFileGroup(grps[g])
-        flatFilePath = await writeToFile(g, flattenedZipDataObjects)
-        let fileName = g
-        let zip = fileName.split("_")[0]
-        await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects)
-    }
-}
-export function testHeaders(flattenedZipDataObjects) {
-    const lengths = flattenedZipDataObjects.map(obj => obj.length).flat()
-    const distinctLengths = new Set(lengths)
-    if (distinctLengths.size !== 1) {
-        throw 'Unexpected plans and pharmacy counts found. Some drugs may have missing drug costs for a plan or pharmacy.';
-    }
-    const distinctHeaders = new Set()
-    flattenedZipDataObjects.forEach(obj => distinctHeaders.add(obj.map(row => row[0]).join(',')))
-    if (distinctHeaders.size !== 1) {
-        throw 'Unexpected set of headers found. Some drugs may have missing drug costs for a plan or pharmacy.';
-    }
-}
-export async function writeToFile(fileName, flattenedZipDataObjects) {
-    // TODO file name
-    const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`)
-    console.log(`Working on file: ${fileName}`)
-    try {fs.unlinkSync(reportFile) } catch (e) { }
-    
-    // testHeaders(flattenedZipDataObjects)
+# Recovering a Dropped Unity Catalog External Table (UNDROP)
 
-    let header = `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`
-    let lines = [header]
-    for (const line of flattenedZipDataObjects){
-        let fullLine = line.map(row => {
-            // remove comma from subelement to prevent them from accidentally being used as a delimiter
-            return row[1].toString().replace(/,/g, '')                                         
-        }).join(',')
-            
-        lines.push(`${fullLine}\n`)
-    }
-    lines.forEach(ln => {
-        fs.appendFileSync(reportFile, ln)
-    })
-    return reportFile
-}
-// each zipcode may have multiple seperate files, this function creates a dictionary that groups the filepaths of those sep files by zip to be iterated on later
-export async function getFilePathGroups(fullPathOut) {
-    let pattern = `${fullPathOut}/*.csv`
-    const csvDataFiles = glob.sync(pattern);
+This document outlines the procedure to recover a Unity Catalog **external table** that was accidentally dropped using the `DROP TABLE` command. The recovery is possible if the underlying data remains intact in S3 and the table’s metadata has not been garbage collected.
 
-    let testStr
-    let parts = [];
-    let groupGlobs = [];
-    csvDataFiles.forEach(nm => {
-        parts = path.basename(nm).split('_')        
-        // if no indices provided, split on _ will give something like esrd.csv for parts[1], so replace the .csv part
-        testStr = `${parts[0]}`
-        if (groupGlobs.indexOf(testStr) < 0) {
-            groupGlobs.push(testStr)
-        }
-    })
-    let groupedFiles = {}
-    groupGlobs.forEach(glb => {
-        pattern = `${fullPathOut}/${glb}*.csv`;
-        // sort and rank of the drug output
-        groupedFiles[glb] = glob.sync(pattern).sort((a, b) => a.localeCompare(b, undefined,{ numeric: true }));
-    })
+Unity Catalog supports the `UNDROP TABLE` command, which restores the dropped table including its schema, metadata, and location. This should be the first method attempted before falling back on manual recovery.
 
-    console.log("Grouped Files Detected:")
-    console.log(groupedFiles);
-    return groupedFiles   
-}
+---
 
-//this function takes the filegroup list for each zip and flattens the file data and combines them and adds some header information
-export async function flattenFileGroup(fileGroupList) {
-    let planIdMap = {}
+## Step 1: Attempt `UNDROP TABLE`
 
-    let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList)
-    let flattenedZipData = flattenZipData(zipGroupSortedObjects, planIdMap)
-    return flattenedZipData
-}
-export async function combineAndSortFileGroupData(fileGroupList) {
+If the table was recently dropped, attempt to recover it using the following SQL command:
 
-    let zipData = []
-    for (const fileName of fileGroupList){
-        let fileData = await readCsv(fileName)
-        zipData.push(...fileData)
-    }
-    // Sort by drugCategory, drugName, planId, mail order last
-    zipData.sort(function (a, b) {
-        let exceptions = [ "Mail order pharmacy" ], indexA, indexB;
-        indexA = exceptions.indexOf(a.source);
-        indexB = exceptions.indexOf(b.source);
-        let mail_order_calc = 0;
-        if (indexA === -1 && indexB === -1) {
-            mail_order_calc = a.source.toLowerCase().localeCompare(b.source.toLowerCase()); // regular case
-        } else {
-            mail_order_calc = indexA - indexB // index will be -1 (doesn't occur), 0 or 1
-        }
-        return (
-            a.drugCategory.localeCompare(b.drugCategory) || 
-            // a.drugGroup.localeCompare(b.drugGroup) ||
-            a.brandGenericFlag.localeCompare(b.brandGenericFlag) ||
-            a.rank - b.rank||
-            a.drugName.localeCompare(b.drugName) ||
-            a.planId.localeCompare(b.planId) || 
-            mail_order_calc
-        )
-    });
-    
-    return zipData 
-}
-export function flattenZipData(zipData, planIdMap) {
-    let flattenedZipData = [];
-    zipData.forEach(priceObjct => {
-        let found = flattenedZipData.find(objct => 
-            objct[0][1] == priceObjct.rank &&
-            objct[1][1] == priceObjct.drugCategory &&
-            objct[2][1] == priceObjct.drugName &&
-            objct[3][1] == priceObjct.quantity
-        )
-        if (!!found) {
-            found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`,priceObjct.cost])
-        } else {
-            var flattenedObj = [
-                [`Rank`, priceObjct.rank],
-                ['Drug Category', priceObjct.drugCategory],
-                ['Drug', priceObjct.drugName],
-                ['Quantity', priceObjct.quantity],
-                ['Refill Frequency', '30'],
-                ['Package Option', priceObjct.packageOption],
-                ['Brand or Generic', priceObjct.brandGenericFlag],
-                [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
-            ]
-            flattenedZipData.push(flattenedObj)
-        }
-        planIdMap[`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`] = priceObjct.planId
-    })    
-    return flattenedZipData
-}
+```sql
+UNDROP TABLE <catalog>.<schema>.<table_name>;
+```
 
-// this function takes a file and flattens the data (formatted to be put in csv format)
-export async function flattenFile(filePath, orderOfPlans, orderOfSources, orderOfPlanIDs) {
-    let currentDrug, currentCategory, currentRank, currentQty, currentRefillFreq, currentPackageOption, currentBorG
-    let planSourceObject = []
-    let planSourceObjects = []
-    let lines = []
-        await csv().fromFile(filePath).subscribe((lineData, rowNum) => {
-            if (lineData.drugName != currentDrug) {
-                if (rowNum > 0) {
-                    // add the completed line to the list
-                    lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`)
-                }
-                // reset loop state
-                planSourceObject = []
-                planSourceObjects = []
-                currentDrug = lineData.drugName
-                currentRank = lineData.rank
-                currentCategory = lineData.drugCategory
-                currentQty = lineData.quantity
-                currentPackageOption = lineData.packageOption
-                currentBorG = lineData.brandGenericFlag
-                currentRefillFreq = "30"
-            }
-            if (!orderOfPlans.includes(lineData.planName)) {
-                orderOfPlans.push(lineData.planName)
-            }
-            if (!orderOfSources.includes(lineData.source)) {
-                orderOfSources.push(lineData.source);
-            }
-    
-            if (!orderOfPlanIDs.includes(lineData.planId)) {
-                orderOfPlanIDs.push(lineData.planId);
-            }
-    
-            planSourceObject[orderOfSources.indexOf(lineData.source)] = lineData.cost
-            planSourceObjects[orderOfPlans.indexOf(lineData.planName)] = planSourceObject.slice()
-        });
-    
-        // required for the last price line
-        lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`)
-    
+This command restores the table as long as the system still retains its metadata. No data movement is required, and the original schema and S3 location are preserved.
 
-    return lines
-}
+If this succeeds, the table is immediately accessible again.
 
-//TODO - moving finished xl files into a seperate dir, may not be needed.
+---
 
-// export async function prepFile(){
+## Step 2: Validate the Restored Table
 
-// }
+After executing the `UNDROP TABLE` command, validate that the table has been restored correctly:
 
+```sql
+-- Confirm that the table is listed again
+SHOW TABLES IN <catalog>.<schema>;
 
-export async function outputToExcel(fullPathOut,filename, flatFilePath, zipCode, flattenedZipDataObjects) {
+-- Verify schema and metadata
+DESCRIBE TABLE <catalog>.<schema>.<table_name>;
 
-    let xlfileName = path.join(fullPathOut,`${filename}_xl_file.xlsx`)
+-- Check sample data
+SELECT * FROM <catalog>.<schema>.<table_name> LIMIT 10;
+```
 
-    //open a workbook
-    let workbook = new Exceljs.Workbook();
-    //add a sheet
-    let worksheet = workbook.addWorksheet("New Sheet")
-    worksheet.columns = flattenedZipDataObjects[0].map(row => new Object({ header: row[0], key: row[0]}))
-    // add 2 empty rows above header row
-    worksheet.spliceRows(1, 0, []) 
-    worksheet.spliceRows(1, 0, []) 
-    // Insert allrow data
-    const rows = []
-    flattenedZipDataObjects.forEach(row => rows.push(row.map(data => data[1])))
-    worksheet.addRows(rows);
-    // default stylingworksheet
-    worksheet.properties.defaultColWidth = 10;
-    worksheet.properties.defaultCellWidth = 10;
-    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
-    worksheet.getRow(2).alignment = { vertical: 'middle', horizontal: 'left' };
-    worksheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
-    worksheet.getRow(1).height = 35;
-    worksheet.getRow(2).height = 35;
-    worksheet.getRow(3).height = 35;
-    worksheet.getColumn(1).width = 8;
-    worksheet.getColumn(2).width = 16;
-    worksheet.getColumn(3).width = 35;
-    worksheet.getColumn(4).width = 9;
-    worksheet.getColumn(5).width = 16;
-    worksheet.getColumn(6).width = 16;
-    worksheet.getRow(1).font = { bold: true, size: 14 };
-    worksheet.getRow(2).font = { bold: true, size: 12 };
-    worksheet.getRow(3).font = { bold: true, size: 12 };
-    worksheet.getRow(1).border = {
-            top: { style: 'medium' },
-            left: { style: 'medium' },
-            bottom: { style: 'medium' },
-            right: { style: 'medium' }
-        };
-    worksheet.getRow(2).border = {
-            top: { style: 'medium' },
-            left: { style: 'medium' },
-            bottom: { style: 'medium' },
-            right: { style: 'medium' }
-        };
-    worksheet.getColumn(7).border = {
-            right: { style: 'medium' }
-        };
+At this stage, you should also confirm that permissions on the table are still intact. If necessary, reapply any required grants using `GRANT` statements.
 
-    // Merge cells Date
-    const zipAndDateCellRange = 'A1:G2'
-    worksheet.mergeCells(zipAndDateCellRange)
-    const today = new Date();
-    const dateString = `${today.getFullYear()}-${('0' + (today.getMonth() + 1)).slice(-2)}-${('0' + today.getDate()).slice(-2)}`;
-    worksheet.getCell('A2').value = `Zip Code: ${zipCode} \n Report Date: ${dateString}`
-    
-    // Split planName, planId, and Pharmacy to own cells
-    let firstPlanColumnNum = 7;
-    for (let i =  firstPlanColumnNum; i < worksheet._columns.length; i++) {
-        let fullColumn =  worksheet._columns[i]
-        let splitColNm = fullColumn.key.split('_')
-        let planId = splitColNm[0]
-        let planName = splitColNm[1]
-        let pharmacyName = splitColNm[2]
-        let thisColumn = worksheet.getColumn(fullColumn.key)
-        worksheet.getCell(1, thisColumn._number).value = `Plan Name: ${planName}`
-        worksheet.getCell(2, thisColumn._number).value = `Plan Id: ${planId}`
-        worksheet.getCell(3, thisColumn._number).value = pharmacyName
-        worksheet.getCell(1, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
-        worksheet.getCell(2, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
-        worksheet.getCell(3, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
-        worksheet.getCell(3, thisColumn._number).width = 30;
-        
-    }
-    // Merge cells row 1 and row 2 for plans
-    firstPlanColumnNum = 8;
-    let mergeSpan = 7;
-    let currentColumnNum = worksheet.getCell(1, firstPlanColumnNum)._column._number;
-    let lastColumnNumber = worksheet._columns[worksheet._columns.length-1]._number
-    while (currentColumnNum+mergeSpan <= lastColumnNumber) {
-        worksheet.mergeCells(1, currentColumnNum, 1, currentColumnNum+mergeSpan)
-        worksheet.mergeCells(2, currentColumnNum, 2, currentColumnNum+mergeSpan)
-        currentColumnNum = currentColumnNum + mergeSpan + 1; // next cell column number
-    }
+---
 
-    // //Frame out file so we can tell how many rows and columns there are
+## Required Permissions for `UNDROP TABLE`
 
-    const columnCount = worksheet.actualColumnCount;
-    const rowCount = worksheet.actualRowCount;
-    let mailOrderCol = 8;
-    //Find Mail-Order Pharmacy price (it's always the last cell in the group so we're gonna check each column and see)
-    for(let col = 8; col <= columnCount; col++)
-    {
-        var cellText = (worksheet.getCell(worksheet.getRow(3).getCell(col)._address).value).substring(0, 100);
+To use `UNDROP TABLE`, a user must meet **one** of the following criteria:
 
-        if(cellText === 'Mail order pharmacy')
-        {
-            mailOrderCol = col - 7;
-            break;
-        }
-    }
-    console.log(`${mailOrderCol} Pharmacies Detected.`)
-    let pharmacyCounter = 1;
-    //console.log(columnCount + ' - ' + rowCount)
-    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-        for (let colNum = 8; colNum <= columnCount; ++colNum) {
-            if ((pharmacyCounter % mailOrderCol) == 0 && colNum !== 8) {
-                // Add style border
-                worksheet.getColumn(colNum).border = {
-                    right: { style: 'medium' }
-                };
-                //Find the value of that cell
-                var mailText = (worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value).substring(0, 100);
-                var mailValue: number = +mailText;
+- The user is the **owner of the dropped table** and has:
+  - `USE CATALOG` on the catalog
+  - `USE SCHEMA` and `CREATE TABLE` on the schema
 
-                //Find a Mail-Order Cell, and track back 1x1 for X number of cells and see if the mail price needs to be highlighted
-                //X number of cells = number of pharmacies
-                for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
-                    //Grab the address of the current "working cell"
-                    let pharmAddress = (worksheet.getRow(rowNum).getCell((colNum - retroNum))._address).toString();
+- The user is the **owner of the schema** and has:
+  - `USE CATALOG` on the catalog
 
-                    //Cut the currency off the cell value and reassign that cell to that number
-                    var pharmText = (worksheet.getCell(pharmAddress).value).substring(0, 100)
-                    var pharmValue: number = +pharmText;
+- The user is the **owner of the catalog**
 
-                    //Highlight the cell yellow if the pharmacy price is more than 3x the mail order pharmacy cost
-                    if (pharmValue >= (mailValue * 3)) {
-                        worksheet.getCell(pharmAddress).fill = {
-                            type: 'pattern',
-                            pattern: 'solid',
-                            fgColor: { argb: 'FFFB00' }
-                        };
-                    }
-                }
-            }
-            pharmacyCounter++;
-        }
-    }
-    
-    // Loop through the file and convert each cell to a number type format
-    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-        for (let colNum = 8; colNum <= columnCount; ++colNum) {
-            let address = (worksheet.getRow(rowNum).getCell((colNum))._address).toString();
-            let value = parseFloat(worksheet.getCell(address).value);
-            // console.log(`Address: ${address} - Value: ${value}`)
-            worksheet.getCell(`${address}`).value = value;
-            worksheet.getCell(`${address}`).numFmt = '"$"#,##0.00';
-        }
-    }
-    // final formatting on row 3
-    worksheet.getRow(3).border = {
-        top: { style: 'medium' },
-        left: { style: 'medium' },
-        bottom: { style: 'medium' },
-        right: { style: 'medium' }
-    };
+- The user is the **owner of the metastore**
 
-    await workbook.xlsx.writeFile(xlfileName);
-    return xlfileName
-}
+- The user has:
+  - `MANAGE` privilege on the dropped table
+  - `USE SCHEMA` and `CREATE TABLE` on the schema
+  - `USE CATALOG` on the catalog
 
------
+If none of these conditions are met, a Unity Catalog admin or metastore admin must perform the recovery.
 
+---
 
-import * as fs from 'fs';
-import * as path from 'path';
-import * as glob from 'glob';
-import { readCsv } from './fileManager';
-const csv = require('csvtojson');
-const Exceljs = require('exceljs');
-
-export async function combineAndExport(fullPathOut) {
-    const grps = await getFilePathGroups(fullPathOut);
-    
-    for (const g of Object.keys(grps)) {
-        let flattenedZipDataObjects = await flattenFileGroup(grps[g]);
-        let flatFilePath = await writeToFile(g, flattenedZipDataObjects);
-        let fileName = g;
-        let zip = fileName.split("_")[0];
-        
-        await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects);
-    }
-}
-
-export async function getFilePathGroups(fullPathOut) {
-    let pattern = `${fullPathOut}/*.csv`;
-    const csvDataFiles = glob.sync(pattern);
-
-    let groupGlobs = [];
-    let groupedFiles: Record<string, string[]> = {};
-
-    csvDataFiles.forEach(nm => {
-        let zipCode = path.basename(nm).split('_')[0]; 
-        if (!groupGlobs.includes(zipCode)) {
-            groupGlobs.push(zipCode);
-        }
-    });
-
-    groupGlobs.forEach(glb => {
-        pattern = `${fullPathOut}/${glb}*.csv`;
-        groupedFiles[glb] = glob.sync(pattern).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    });
-
-    console.log("Grouped Files Detected:", groupedFiles);
-    return groupedFiles;
-}
-
-export async function flattenFileGroup(fileGroupList) {
-    let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList);
-    return flattenZipData(zipGroupSortedObjects);
-}
-
-export async function combineAndSortFileGroupData(fileGroupList) {
-    let zipData = [];
-    for (const fileName of fileGroupList) {
-        let fileData = await readCsv(fileName);
-        zipData.push(...fileData);
-    }
-
-    zipData.sort((a, b) => (
-        a.drugCategory.localeCompare(b.drugCategory) ||
-        a.brandGenericFlag.localeCompare(b.brandGenericFlag) ||
-        a.rank - b.rank ||
-        a.drugName.localeCompare(b.drugName) ||
-        a.planId.localeCompare(b.planId)
-    ));
-
-    return zipData;
-}
-
-export function flattenZipData(zipData) {
-    let flattenedZipData = [];
-    
-    zipData.forEach(priceObjct => {
-        let found = flattenedZipData.find(objct => 
-            objct[0][1] == priceObjct.rank &&
-            objct[1][1] == priceObjct.drugCategory &&
-            objct[2][1] == priceObjct.drugName &&
-            objct[3][1] == priceObjct.quantity
-        );
-
-        if (found) {
-            found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]);
-        } else {
-            flattenedZipData.push([
-                ['Rank', priceObjct.rank],
-                ['Drug Category', priceObjct.drugCategory],
-                ['Drug', priceObjct.drugName],
-                ['Quantity', priceObjct.quantity],
-                ['Refill Frequency', '30'],
-                ['Package Option', priceObjct.packageOption],
-                ['Brand or Generic', priceObjct.brandGenericFlag],
-                [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
-            ]);
-        }
-    });
-
-    return flattenedZipData;
-}
-
-export async function writeToFile(fileName, flattenedZipDataObjects) {
-    const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`);
-    console.log(`Working on file: ${fileName}`);
-
-    try { fs.unlinkSync(reportFile); } catch (e) {}
-
-    let lines = [
-        `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`
-    ];
-
-    flattenedZipDataObjects.forEach(line => {
-        let fullLine = line.map(row => row[1]?.toString().replace(/,/g, '') || "").join(',');
-        lines.push(`${fullLine}\n`);
-    });
-
-    lines.forEach(ln => fs.appendFileSync(reportFile, ln));
-
-    return reportFile;
-}
-
-export async function outputToExcel(fullPathOut, filename, flatFilePath, zipCode, flattenedZipDataObjects) {
-    let xlfileName = path.join(fullPathOut, `${filename}_xl_file.xlsx`);
-    let workbook = new Exceljs.Workbook();
-    let worksheet = workbook.addWorksheet("New Sheet");
-
-    worksheet.columns = flattenedZipDataObjects[0].map(row => ({ header: row[0], key: row[0] }));
-    worksheet.addRows(flattenedZipDataObjects.map(row => row.map(data => data[1])));
-
-    const columnCount = worksheet.actualColumnCount;
-    const rowCount = worksheet.actualRowCount;
-
-    let mailOrderCol = 8;
-    for (let col = 8; col <= columnCount; col++) {
-        let cellValue = worksheet.getCell(worksheet.getRow(3).getCell(col)._address).value;
-        let cellText = (cellValue && typeof cellValue === "string") ? cellValue.substring(0, 100) : "";
-
-        if (cellText === 'Mail order pharmacy') {
-            mailOrderCol = col - 7;
-            break;
-        }
-    }
-
-    console.log(`${mailOrderCol} Pharmacies Detected.`);
-    
-    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-        for (let colNum = 8; colNum <= columnCount; ++colNum) {
-            let cellValue = worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value;
-            let mailText = (cellValue && typeof cellValue === "string") ? cellValue.substring(0, 100) : "0";
-            let mailValue = parseFloat(mailText) || 0;
-
-            for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
-                let pharmAddress = worksheet.getRow(rowNum).getCell((colNum - retroNum))._address;
-                let pharmCellValue = worksheet.getCell(pharmAddress).value;
-                let pharmText = (pharmCellValue && typeof pharmCellValue === "string") ? pharmCellValue.substring(0, 100) : "0";
-                let pharmValue = parseFloat(pharmText) || 0;
-
-                if (pharmValue >= (mailValue * 3)) {
-                    worksheet.getCell(pharmAddress).fill = {
-                        type: 'pattern',
-                        pattern: 'solid',
-                        fgColor: { argb: 'FFFB00' }
-                    };
-                }
-            }
-        }
-    }
-
-    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-        for (let colNum = 8; colNum <= columnCount; ++colNum) {
-            let address = worksheet.getRow(rowNum).getCell(colNum)._address;
-            let value = parseFloat(worksheet.getCell(address).value) || 0;
-            worksheet.getCell(address).value = value;
-            worksheet.getCell(address).numFmt = '"$"#,##0.00';
-        }
-    }
-
-    await workbook.xlsx.writeFile(xlfileName);
-    return xlfileName;
-}
-
-
-It looks like you have made some modifications to the report to make things faster and hopefully easier. There are some modifications in these reports that we would like restored to the original format though.  Would it be possible to provide the headers displayed as in they were previous reports.
-
-S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_RITE AID PHARMACY 03871	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_Mail order pharmacy	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_RITE AID PHARMACY 03871	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_SAFEWAY PHARMACY #1657	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_WALMART PHARMACY 10-3804	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_Mail order pharmacy	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_WALGREENS #19129	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_CVS PHARMACY # 10892	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_COSTCO PHARMACY #1326	S5617-214-0_Cigna Healthcare Assurance Rx (PDP)_NEXT DOOR PHARMACY
-
-
-
-Previous Format on three lines:
+Let me know if you’d like this in Markdown or Confluence-compatible format.
