@@ -1,70 +1,116 @@
-Understood. Here is a **clean, professional version** of **Step 1 and Step 2**, along with a brief introduction and permission requirements — formatted for internal documentation or a wiki page. It avoids emojis and informal markers like green checks.
+Databricks provides a wide range of **native connectors**, **libraries**, and **partner integrations** to ingest data from various source systems. These connectors cover structured, semi-structured, unstructured, streaming, and on-prem/cloud-based systems.
+
+Here’s a categorized list of **common Databricks connectors for data ingestion**:
 
 ---
 
-# Recovering a Dropped Unity Catalog External Table (UNDROP)
+### 🔹 **Cloud Storage Connectors**
 
-This document outlines the procedure to recover a Unity Catalog **external table** that was accidentally dropped using the `DROP TABLE` command. The recovery is possible if the underlying data remains intact in S3 and the table’s metadata has not been garbage collected.
-
-Unity Catalog supports the `UNDROP TABLE` command, which restores the dropped table including its schema, metadata, and location. This should be the first method attempted before falling back on manual recovery.
-
----
-
-## Step 1: Attempt `UNDROP TABLE`
-
-If the table was recently dropped, attempt to recover it using the following SQL command:
-
-```sql
-UNDROP TABLE <catalog>.<schema>.<table_name>;
-```
-
-This command restores the table as long as the system still retains its metadata. No data movement is required, and the original schema and S3 location are preserved.
-
-If this succeeds, the table is immediately accessible again.
+* **AWS S3**
+* **Azure Data Lake Storage (ADLS) Gen1 & Gen2**
+* **Google Cloud Storage (GCS)**
+* **Blob Storage (Azure)**
+* **Wasabi (via S3-compatible APIs)**
 
 ---
 
-## Step 2: Validate the Restored Table
+### 🔹 **Databases (JDBC/ODBC and Native Connectors)**
 
-After executing the `UNDROP TABLE` command, validate that the table has been restored correctly:
+Databricks can connect to most databases via JDBC, and some have optimized native connectors:
 
-```sql
--- Confirm that the table is listed again
-SHOW TABLES IN <catalog>.<schema>;
-
--- Verify schema and metadata
-DESCRIBE TABLE <catalog>.<schema>.<table_name>;
-
--- Check sample data
-SELECT * FROM <catalog>.<schema>.<table_name> LIMIT 10;
-```
-
-At this stage, you should also confirm that permissions on the table are still intact. If necessary, reapply any required grants using `GRANT` statements.
+* **MySQL, PostgreSQL**
+* **SQL Server / Azure SQL DB**
+* **Oracle**
+* **Snowflake**
+* **Google BigQuery**
+* **Amazon Redshift**
+* **Databricks Lakehouse Federation (Unity Catalog with External Tables)**
 
 ---
 
-## Required Permissions for `UNDROP TABLE`
+### 🔹 **Delta Sharing Connectors**
 
-To use `UNDROP TABLE`, a user must meet **one** of the following criteria:
-
-- The user is the **owner of the dropped table** and has:
-  - `USE CATALOG` on the catalog
-  - `USE SCHEMA` and `CREATE TABLE` on the schema
-
-- The user is the **owner of the schema** and has:
-  - `USE CATALOG` on the catalog
-
-- The user is the **owner of the catalog**
-
-- The user is the **owner of the metastore**
-
-- The user has:
-  - `MANAGE` privilege on the dropped table
-  - `USE SCHEMA` and `CREATE TABLE` on the schema
-  - `USE CATALOG` on the catalog
-
-If none of these conditions are met, a Unity Catalog admin or metastore admin must perform the recovery.
+* **Delta Sharing (open protocol)**
+* **Databricks-to-Databricks sharing**
+* **Connect to Delta Shares via Tableau, Power BI, Python, or other Delta Sharing clients**
 
 ---
 
-Let me know if you’d like this in Markdown or Confluence-compatible format.
+### 🔹 **Streaming Sources (Structured Streaming)**
+
+* **Kafka / Confluent Kafka**
+* **Event Hubs (Azure)**
+* **AWS Kinesis**
+* **Files from cloud storage with Autoloader (incremental file ingestion)**
+* **Socket / TCP Streaming**
+* **Pub/Sub (via connectors or Spark integrations)**
+
+---
+
+### 🔹 **ETL & Integration Tools**
+
+* **Fivetran**
+* **Matillion**
+* **Informatica**
+* **Qlik Replicate**
+* **Talend**
+* **dbt (for transformations)**
+
+---
+
+### 🔹 **SaaS Applications (via Partners or APIs)**
+
+Usually via Fivetran, custom APIs, or partner connectors:
+
+* **Salesforce**
+* **Google Analytics / GA4**
+* **Marketo, HubSpot**
+* **Zendesk, ServiceNow**
+* **NetSuite, Workday**
+* **Shopify**
+
+---
+
+### 🔹 **File Formats**
+
+Databricks supports a wide range of file formats:
+
+* **CSV, JSON, Avro, Parquet, ORC**
+* **Delta Lake**
+* **XML (via libraries)**
+* **Excel (via `com.crealytics:spark-excel` or Python/pandas)**
+
+---
+
+### 🔹 **Custom Ingestion Methods**
+
+* **REST APIs** (via Python, Scala, or notebooks)
+* **FTP/SFTP** (via Python or custom scripts)
+* **SMB/NAS** (via mounted volumes or custom solutions)
+* **Message brokers** (via Spark or Kafka integration)
+
+---
+
+### 🔹 **Data Integration via Unity Catalog (Federated Queries)**
+
+* **External Tables from Google BigQuery, Snowflake, Redshift, Azure Synapse**
+  (accessed via **Lakehouse Federation** or **Partner Connect**)
+
+---
+
+### 🔹 **Partner Connect Integrations**
+
+Databricks provides 1-click integrations with:
+
+* **Airbyte**
+* **Fivetran**
+* **Qlik**
+* **dbt Cloud**
+* **Power BI**
+* **Tableau**
+* **Sigma Computing**
+* **Rivery**
+
+---
+
+Let me know if you want a table or diagram to summarize this, or need a focused list by use case (e.g., ingestion from SAP, mainframes, legacy files, etc.).
