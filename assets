@@ -1653,3 +1653,103 @@ CALL HSPROCS.ABC_DETAIL_LOAD_TD2TD('PROC_FOR_AGENT_AGREEMENT_HISTORY_LOAD',1,'TG
 SET PROC_MSG ='PROC_FOR_AGENT_AGREEMENT_HISTORY_LOAD EXECUTED SUCCESSFULLY';
 
 END;
+
+
+
+--------------
+Columns AAH
+|ColumnName                            |
+|--------------------------------------|
+|NPN                                   |
+|AGENT_LEVEL                           |
+|AGRMT_ID                              |
+|AGREEMENT_EFFECTIVE_DATE              |
+|DIRECT_UPLINE_ROLE                    |
+|DIRECT_UPLINE_NAME                    |
+|DIRECT_UPLINE_AGENCY_ID               |
+|DIRECT_UPLINE_SIRCON_AGENT_ID         |
+|DIRECT_UPLINE_AGREEMENT_EFFECTIVE_DATE|
+|DIRECT_UPLINE_AGREEMENT_END_DATE      |
+|PBE_ROLE                              |
+|PBE_AGENCY_ID                         |
+|PBE_PDCR_CD                           |
+|PBE_SIRCON_AGENT_ID                   |
+|PBE_AGREEMENT_EFFECTIVE_DATE          |
+|PBE_AGREEMENT_END_DATE                |
+|GA_ROLE                               |
+|GA_NAME                               |
+|GA_ID                                 |
+|GA_PDCR_CD                            |
+|GA_SIRCON_AGENT_ID                    |
+|GA_AGREEMENT_END_DATE                 |
+|MGA_ROLE                              |
+|MGA_NAME                              |
+|MGA_ID                                |
+|MGA_PDCR_CD                           |
+|MGA_AGREEMENT_EFFECTIVE_DATE          |
+|MGA_AGREEMENT_END_DATE                |
+|SGA_ROLE                              |
+|SGA_NAME                              |
+|SGA_ID                                |
+|SGA_PDCR_CD                           |
+|SGA_SIRCON_AGENT_ID                   |
+|SGA_AGREEMENT_EFFECTIVE_DATE          |
+|SGA_AGREEMENT_END_DATE                |
+|SGA2_ROLE                             |
+|SGA2_NAME                             |
+|SGA2_ID                               |
+|SGA2_PDCR_CD                          |
+|SGA2_SIRCON_AGENT_ID                  |
+|SGA2_AGREEMENT_EFFECTIVE_DATE         |
+|SGA2_AGREEMENT_END_DATE               |
+|FMO_ROLE                              |
+|FMO_NAME                              |
+|FMO_ID                                |
+|FMO_PDCR_CD                           |
+|FMO_SIRCON_AGENT_ID                   |
+|FMO_AGREEMENT_EFFECTIVE_DATE          |
+|FMO_AGREEMENT_END_DATE                |
+|RFMO_ROLE                             |
+|RFMO_NAME                             |
+|RFMO_PDCR_CD                          |
+|RFMO_SIRCON_AGENT_ID                  |
+|RFMO_AGREEMENT_EFFECTIVE_DATE         |
+|RFMO_AGREEMENT_END_DATE               |
+|NFMO_ROLE                             |
+|NFMO_NAME                             |
+|NFMO_PDCR_CD                          |
+|NFMO_SIRCON_AGENT_ID                  |
+|NFMO_AGREEMENT_EFFECTIVE_DATE         |
+|NFMO_AGREEMENT_END_DATE               |
+|AFMO_ROLE                             |
+|AFMO_NAME                             |
+|AFMO_ID                               |
+|AFMO_PDCR_CD                          |
+|AFMO_SIRCON_AGENT_ID                  |
+|AFMO_AGREEMENT_EFFECTIVE_DATE         |
+|AFMO_AGREEMENT_END_DATE               |
+|TOPLINE_ROLE                          |
+|TOPLINE_NAME                          |
+|TOPLINE_ID                            |
+|TOPLINE_PDCR_CD                       |
+|TOPLINE_SIRCON_AGENT_ID               |
+|TOPLINE_AGREEMENT_EFFECTIVE_DATE      |
+|TOPLINE_AGREEMENT_END_DATE            |
+|HIERARCHY_TYPE_D                      |
+|HIERARCHY_SUB_TYPE_D                  |
+|REPORT_DATE                           |
+|RFMO_ID                               |
+|GA_AGREEMENT_EFFECTIVE_DATE           |
+|DIRECT_UPLINE_PDCR_CD                 |
+|AGENT_TERMINATION_DATE                |
+|Agent_PDCR_CD                         |
+|Agent_Name                            |
+|Source                                |
+|NFMO_ID                               |
+|MGA_SIRCON_AGENT_ID                   |
+|PBE_NAME                              |
+|AGREEMENT_END_DATE                    |
+|AGENT_EFFECTIVE_DATE                  |
+|SIRCON_AGENT_ID                       |
+|AGENT_ID                              |
+
