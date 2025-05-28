@@ -1753,3 +1753,4478 @@ Columns AAH
 |SIRCON_AGENT_ID                       |
 |AGENT_ID                              |
 
+---------------------------------------------
+
+REPLACE PROCEDURE HSPROCS.
+PROC_FOR_GR_MEMBER_VOID
+(OUT PROC_MSG VARCHAR(300))
+
+SQL SECURITY INVOKER
+
+BEGIN
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+-- SECTION 1: BUILD REFERENCE DATASETS --
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+
+--------------------------------------------------
+-- 1.1: ReportYearReference
+--------------------------------------------------
+
+-- Ensure we are only grabbing the relevant data
+CREATE MULTISET VOLATILE TABLE ReportYearReference AS (
+SELECT
+MIN(YEAR(Reportbegindate)) AS MinYear,
+MAX(YEAR(Reportbegindate)) AS MaxYear
+FROM REPORTING_V.GR_MEMBER
+)WITH DATA NO PRIMARY INDEX ON COMMIT PRESERVE ROWS ;
+
+--------------------------------------------------
+-- 1.2: Reference dataset for Medicare IDs
+--------------------------------------------------
+
+-- Pull active Medicare IDs that we can use to enrich our data
+CREATE MULTISET VOLATILE TABLE VT_MEDICARE_IDS AS (
+SELECT
+MEDCR_ID,
+SRC_MBR_KEY,
+CASE
+WHEN ID_TY = 'MBI' THEN 1
+WHEN ID_TY = 'HICN' THEN 2
+ELSE 3
+END AS ID_PRIORITY
+FROM DATAMART_MEMBER_V.MBR_MEDCR_DIM MEDCR_ID
+WHERE IS_CURR_IND='Y'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY SRC_MBR_KEY ORDER BY SRC_TERMNTN_DT DESC, SRC_EFF_DT DESC, ID_PRIORITY ASC ) = 1
+) WITH DATA NO PRIMARY INDEX ON COMMIT PRESERVE ROWS;
+
+----------------------------------------------------------------------------------------------------------
+-- 1.3: Reference dataset to identify Market and Product
+-- Note: Uses similar logic to what can be found in HSPROCS.PROC_FOR_GR_MEMBER_JJ, to ensure accurate LOVs
+----------------------------------------------------------------------------------------------------------
+
+-- Follows similar logic as GR_MEMBER to begin deriving values for PlanTypeReporting (Product) and Market
+-- But only pulls in needed fields to resolve PlanTypeReporting (Product) and Market
+CREATE MULTISET VOLATILE TABLE VT_REF_LANDSCAPEMA_PRELIM AS (
+--SNP Plans
+SELECT
+EXTRACT(YEAR FROM MidMonthDate) AS PlanYear,
+Contract_ID || '_' || right('000' || trim(PLan_ID),3) || '_' || right('000' || trim(Segment_ID),3) as Contract_PBP_Segment,
+Organization_Name,
+CASE
+WHEN Special_Needs_Plan_Type = 'Institutional' THEN 'I-SNP'
+WHEN Special_Needs_Plan_Type = 'Dual-Eligible' THEN 'D-SNP'
+WHEN Special_Needs_Plan_Type = 'Chronic or Disabling Condition' THEN 'C-SNP'
+ELSE 'Unknown'
+END AS PlanTypeReporting,
+State,
+County
+FROM CMS_CORE_V.Ref_CMS_LandscapeSourcefileSNP
+UNION ALL
+--NON-SNP Plans
+SELECT
+EXTRACT(YEAR FROM MidMonthDate) AS PlanYear,
+Contract_ID || '_' || right('000' || trim(PLan_ID),3) || '_' || right('000' || trim(Segment_ID),3) as Contract_PBP_Segment,
+Organization_Name,
+CASE
+WHEN Drug_Benefit_Type IS NULL AND Type_of_Medicare_Health_Plan LIKE '%HMO%' THEN 'MA Only - HMO'
+WHEN Drug_Benefit_Type IS NULL AND Type_of_Medicare_Health_Plan LIKE '%PPO%' THEN 'MA Only - PPO'
+WHEN Type_of_Medicare_Health_Plan LIKE '%PPO%' THEN 'PPO'
+WHEN Type_of_Medicare_Health_Plan LIKE '%HMO%' THEN 'HMO'
+WHEN Type_of_Medicare_Health_Plan LIKE '%PFFS%' THEN 'PFFS'
+WHEN Type_of_Medicare_Health_Plan LIKE '%Cost%' THEN 'Cost'
+WHEN Type_of_Medicare_Health_Plan LIKE '%MSA%' THEN 'MSA'
+ELSE 'Unknown'
+END AS PlanTypeReporting,
+State,
+County
+FROM CMS_CORE_V.Ref_CMS_LandscapeSourcefileMA
+UNION ALL
+--MMP Plans
+SELECT
+EXTRACT(YEAR FROM MidMonthDate) AS PlanYear,
+Contract_ID || '_' || right('000' || trim(PLan_ID),3) || '_000' as Contract_PBP_Segment,
+Organization_Name,
+'MMP' AS PlanTypeReporting,
+State,
+County
+FROM CMS_CORE_V.Ref_CMS_LandscapeSourcefileMMP
+UNION ALL
+--PDP Plans
+SELECT
+EXTRACT(YEAR FROM MidMonthDate) AS PlanYear,
+Contract_ID || '_' || right('000' || trim(PLan_ID),3) || '_000' as Contract_PBP_Segment,
+Company_Name as Organization_Name,
+'PDP' AS PlanTypeReporting,
+State,
+'N/A' as County
+FROM CMS_CORE_V.Ref_CMS_LandscapeSourcefilePDP
+) WITH DATA NO PRIMARY INDEX ON COMMIT PRESERVE ROWS;
+
+COLLECT STATISTICS COLUMN (STATE ,COUNTY) ON VT_REF_LANDSCAPEMA_PRELIM;
+COLLECT STATISTICS COLUMN (STATENAME ,COUNTYNAME) ON BUSINESS_OPS_CORE_T.LU_SSA_STATE_COUNTY;
+
+-- Continues following similar logic as GR_MEMBER to derive values for PlanTypeReporting and Market
+CREATE MULTISET VOLATILE TABLE VT_REF_LANDSCAPEMA AS (
+SELECT
+REFLAND.PlanYear,
+REFLAND.Contract_PBP_Segment,
+REFLAND.Organization_Name,
+REFLAND.PlanTypeReporting,
+LPAD(SSA.SSA, 5, '0') AS SSA
+FROM VT_REF_LANDSCAPEMA_PRELIM REFLAND
+LEFT JOIN BUSINESS_OPS_CORE_V.LU_SSA_STATE_COUNTY SSA
+ON REFLAND.State = SSA.StateName
+AND REFLAND.County = SSA.CountyName
+UNION ALL
+SELECT
+REFLAND.PlanYear + 1 AS PlanYear,
+REFLAND.Contract_PBP_Segment,
+REFLAND.Organization_Name,
+REFLAND.PlanTypeReporting,
+LPAD(SSA.SSA, 5, '0') AS SSA
+FROM VT_REF_LANDSCAPEMA_PRELIM REFLAND
+LEFT JOIN BUSINESS_OPS_CORE_V.LU_SSA_STATE_COUNTY SSA
+ON REFLAND.State = SSA.StateName
+AND REFLAND.County = SSA.CountyName
+) WITH DATA NO PRIMARY INDEX ON COMMIT PRESERVE ROWS;
+
+DROP TABLE VT_REF_LANDSCAPEMA_PRELIM;
+
+COLLECT STATISTICS COLUMN (PLANTYPEREPORTING) ON VT_REF_LANDSCAPEMA;
+COLLECT STATISTICS COLUMN (ORGANIZATION_NAME) ON VT_REF_LANDSCAPEMA;
+COLLECT STATISTICS COLUMN (SSA) ON VT_REF_LANDSCAPEMA;
+
+-- Begin deriving Market
+CREATE SET VOLATILE TABLE VT_REF_MARKET AS (
+SELECT
+REFLAND.PlanYear,
+REFLAND.Contract_PBP_Segment,
+CASE
+WHEN REFLAND.PlanYear = 2023 AND REFLAND.Contract_PBP_Segment IN ('H4513_048_000','H4513_056_002') AND REFLAND.SSA = '01560' THEN 'Alabama'
+WHEN REFLAND.PlanYear = 2023 AND REFLAND.Contract_PBP_Segment IN ('H7849_068_000','H7849_069_000') AND REFLAND.SSA = '01560' THEN 'Georgia'
+ELSE MKT.Market
+END AS Market
+FROM VT_REF_LANDSCAPEMA REFLAND
+JOIN BUSINESS_OPS_CORE_V.LU_MARKET_MAPPINGS_SOURCE MKT
+ON REFLAND.SSA = LPAD(MKT.SSA, 5, '0')
+WHERE
+PlanTypeReporting <> 'PDP'
+AND (
+Organization_Name LIKE 'Cigna%'
+OR Organization_Name LIKE '%HealthSpring%'
+OR Organization_Name LIKE '%Health Spring%'
+OR Organization_Name LIKE '%Bravo%'
+)
+) WITH DATA PRIMARY INDEX (PlanYear, Contract_PBP_Segment, Market) ON COMMIT PRESERVE ROWS;
+
+--Grab only the columns we need to finish deriving PlanTypeReporting
+CREATE SET VOLATILE TABLE VT_REF_PLANTYPE AS (
+SELECT
+PlanYear,
+Contract_PBP_Segment,
+PlanTypeReporting
+FROM VT_REF_LANDSCAPEMA
+) WITH DATA PRIMARY INDEX (PlanYear, Contract_PBP_Segment,PlanTypeReporting) ON COMMIT PRESERVE ROWS;
+
+DROP TABLE VT_REF_LANDSCAPEMA;
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+-- 1.4: ENROLLKEYS Reference Dataset, picks up VOIDS
+-- Note: A VOID is identified as a record with the same EFFDATE AND TERMDATE.
+-- As we will later be joining with MEMID, SIGNATUREDATE, PLANID, we partition by this subset,
+-- and pick the earliest LASTUPDATE value, and then earliest CREATEDATE if applicable
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+COLLECT STATISTICS COLUMN (PLANID ,MEMID ,SIGNATUREDATE) ON QNXT_CORE_T.ENROLLKEYS_AUDIT;
+COLLECT STATISTICS COLUMN (EFFDATE ,TERMDATE) ON QNXT_CORE_T.ENROLLKEYS_AUDIT;
+
+CREATE SET VOLATILE TABLE VT_ENROLLKEYS_AUDIT AS (
+SELECT
+ENROLLID,
+MEMID,
+PLANID,
+SIGNATUREDATE,
+CREATEDATE,
+LASTUPDATE
+FROM QNXT_CORE_V.ENROLLKEYS_AUDIT
+WHERE EFFDATE=TERMDATE
+QUALIFY ROW_NUMBER() OVER (PARTITION BY MEMID, SIGNATUREDATE, PLANID ORDER BY LASTUPDATE, CREATEDATE) = 1
+) WITH DATA PRIMARY INDEX (MEMID, SIGNATUREDATE, PLANID) ON COMMIT PRESERVE ROWS;
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+-- SECTION 2: BUILD MAIN DATASETS --
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------
+-- 2.1: Final Dataset, utilizing all reference datasets to enrich as needed
+---------------------------------------------------------------------------
+
+COLLECT STATISTICS COLUMN (PLANYEAR ,CONTRACT_PBP_SEGMENT) ON VT_REF_PLANTYPE;
+COLLECT STATISTICS COLUMN (PLANYEAR ,CONTRACT_PBP_SEGMENT ,PLANTYPEREPORTING) ON VT_REF_PLANTYPE;
+COLLECT STATISTICS COLUMN (SIGNATUREDATE) ON VT_ENROLLKEYS_AUDIT;
+COLLECT STATISTICS COLUMN (MEMID ,PLANID ,SIGNATUREDATE) ON VT_ENROLLKEYS_AUDIT;
+COLLECT STATISTICS COLUMN (PLANYEAR ,CONTRACT_PBP_SEGMENT) ON VT_REF_MARKET;
+COLLECT STATISTICS COLUMN (PLANYEAR ,CONTRACT_PBP_SEGMENT, MARKET) ON VT_REF_MARKET;
+COLLECT STATISTICS COLUMN (SRC_MBR_KEY) ON VT_MEDICARE_IDS;
+COLLECT STATISTICS COLUMN (ETL_IS_CURR_IND ,ETL_IS_DEL_IND ,PRODT_TY_CD) ON DATAMART_MEMBER_T.MBR_VOID_ENRLMT_CVRG_BASE;
+COLLECT STATISTICS COLUMN (SRC_MBR_KEY ,ENRLMT_SIG_DT) ON DATAMART_MEMBER_T.MBR_VOID_ENRLMT_CVRG_BASE;
+COLLECT STATISTICS COLUMN (HLTHPLN_SRC_PLAN_SK) ON DATAMART_MEMBER_T.MBR_VOID_ENRLMT_CVRG_BASE;
+COLLECT STATISTICS COLUMN (ETL_IS_CURR_IND) ON DATAMART_MEMBER_T.MBR_VOID_ENRLMT_CVRG_BASE;
+COLLECT STATISTICS COLUMN (ETL_IS_DEL_IND) ON DATAMART_MEMBER_T.MBR_VOID_ENRLMT_CVRG_BASE;
+COLLECT STATISTICS COLUMN (PRODT_TY_CD) ON DATAMART_MEMBER_T.MBR_VOID_ENRLMT_CVRG_BASE;
+COLLECT STATISTICS COLUMN (REPORTBEGINDATE ,MEDICAREID) ON REPORTING_T.SDO_GBSA_ENRLMT;
+COLLECT STATISTICS COLUMN (PRODT_SUB_TY) ON REPORTING_T.CDO_HLTHPLN;
+
+-- Grabs ReportBeginDate, MedicareID, EventDate, Product, and Market, which are the key columns we need
+-- All other fields are taken for auditing purposes
+DELETE FROM REPORTING_T.GR_MEMBER_VOID ALL;
+INSERT INTO REPORTING_T.GR_MEMBER_VOID
+SELECT
+TRUNC(MVECB.CoverageStartDate, 'MONTH') AS ReportBeginDate,
+VGMI.MEDCR_ID AS MedicareID,
+TRUNC(KEYS.CREATEDATE, 'DDD') AS EventDate,
+TRUNC(KEYS.LASTUPDATE,'DDD') AS VoidDate,
+CASE WHEN LEFT(STRTOK(MVECB.HealthPlanIntelligentKey, '_', 2), 1) = '8' THEN 'Group MA' ELSE PLANTYPE.PlanTypeReporting END AS Product,
+CASE WHEN LEFT(STRTOK(MVECB.HealthPlanIntelligentKey, '_', 2), 1) = '8' THEN 'Group MA' ELSE MARKET.Market END AS Market,
+MVECB.ProductTypeContinuousFirstDate as ContinuousEffectiveDate,
+SUBSTRING(MVECB.HealthPlanIntelligentKey, 0, 14) AS Contract_PBP_Segment,
+MVECB.HealthPlanIntelligentKey,
+MVECB.MemberKey,
+MVECB.SourceMemberKey,
+MVECB.ProductTypeCode,
+MVECB.CoverageTypeCode,
+MVECB.PayorName,
+MVECB.EnrollmentStartDate,
+MVECB.CoverageStartDate,
+MVECB.EnrollmentEndDate,
+MVECB.CoverageEndDate,
+MVECB.EnrollmentSignatureDate,
+KEYS.ENROLLID,
+KEYS.MEMID,
+KEYS.SIGNATUREDATE,
+KEYS.CREATEDATE,
+KEYS.LASTUPDATE
+FROM OSS_PROVISIONING_V.svMemberVoidedEnrollmentCoverageBase MVECB
+LEFT JOIN OSS_PROVISIONING_V.svHealthplanSourcePlanDim HPSP
+ON MVECB.HealthPlanSourcePlanKey = HPSP.HealthPlanSourcePlanKey
+LEFT JOIN VT_MEDICARE_IDS VGMI
+ON MVECB.SourceMemberKey = VGMI.SRC_MBR_KEY
+LEFT JOIN OSS_PROVISIONING_V.cdoHealthPlan HP
+ON MVECB.HealthPlanIntelligentKey = HP.HealthPlanIK
+LEFT JOIN VT_ENROLLKEYS_AUDIT KEYS
+ON SUBSTRING(MVECB.SourceMemberKey, 4) = KEYS.MEMID
+AND MVECB.EnrollmentSignatureDate = KEYS.SIGNATUREDATE
+AND HPSP.SourcePlanId = KEYS.PLANID
+LEFT JOIN VT_REF_MARKET MARKET
+ON EXTRACT(YEAR FROM MVECB.CoverageStartDate) = MARKET.PlanYear
+AND SUBSTRING(MVECB.HealthPlanIntelligentKey, 0, 14) = MARKET.Contract_PBP_Segment
+LEFT JOIN VT_REF_PLANTYPE PLANTYPE
+ON EXTRACT(YEAR FROM MVECB.CoverageStartDate) = PLANTYPE.PlanYear
+AND SUBSTRING(MVECB.HealthPlanIntelligentKey, 0, 14) = PLANTYPE.Contract_PBP_Segment
+WHERE
+EXTRACT(YEAR FROM MVECB.CoverageStartDate) BETWEEN (SELECT MinYear FROM ReportYearReference) AND (SELECT MaxYear FROM ReportYearReference)
+AND MVECB.ETLIsCurrentIndicator = 'Y'
+AND MVECB.ETLIsDeletedIndicator = 'N'
+AND MVECB.ProductTypeCode = 'Medicare'
+AND HP.ProductSubType <> 'PDP'
+AND NOT EXISTS (
+SELECT *
+FROM OSS_PROVISIONING_V.sdoGBSAEnrollment enroll
+WHERE
+VGMI.MEDCR_ID = enroll.MedicareID
+AND enroll.ReportBeginDate BETWEEN ADD_MONTHS(MVECB.CoverageStartDate,-1) AND ADD_MONTHS(MVECB.CoverageStartDate,1)
+)
+;
+
+DROP TABLE ReportYearReference;
+DROP TABLE VT_MEDICARE_IDS;
+DROP TABLE VT_REF_MARKET;
+DROP TABLE VT_REF_PLANTYPE;
+DROP TABLE VT_ENROLLKEYS_AUDIT;
+
+CALL HSPROCS.ABC_HEADER_LOAD('PROC_FOR_GR_MEMBER_VOID_LOAD','',:PROC_MSG);
+CALL HSPROCS.ABC_DETAIL_LOAD_TD2TD('PROC_FOR_GR_MEMBER_VOID_LOAD',1,'TGT',:PROC_MSG);
+
+SET PROC_MSG ='PROC_FOR_GR_MEMBER_VOID EXECUTED SUCCESSFULLY';
+
+END;
+
+
+--------------------------------
+REPLACE PROCEDURE HSPROCS.
+PROC_FOR_GR_MEMBER_JJ
+(OUT PROC_MSG VARCHAR(300))
+
+SQL SECURITY INVOKER
+
+BEGIN
+
+/*select * v
+from data_quality_checks
+order by ScriptBuild,ScriptStep*/
+
+--REGION Reference Tables
+-----------------------------------------Ref / Lookup Tables-----------------
+--Start & End Year for limiting data; during crossover period where next year data starts to appear but is not effective then extract 5 years, when moving to next calendar year drop back to 4 years of history
+CREATE MULTISET VOLATILE TABLE ReportYearReference AS (
+select case when extract(year from current_date) = MAX(extract(year from enroll.Reportbegindate)) THEN MAX(extract(year from enroll.Reportbegindate))-3
+when extract(year from current_date) = (MAX(extract(year from enroll.Reportbegindate))-1) THEN MAX(extract(year from enroll.Reportbegindate))-4
+else MAX(extract(year from enroll.Reportbegindate))-3 end AS MinYear,
+MAX(extract(year from enroll.Reportbegindate)) as MaxYear
+FROM OSS_PROVISIONING_V.sdoGBSAEnrollment as enroll
+)WITH DATA PRIMARY INDEX(MinYear,MaxYear) ON COMMIT PRESERVE ROWS ;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (CONTRACTID ,MIDMONTHDATE),
+COLUMN (CONTRACTID)
+ON CMS_CORE_T.Ref_CMS_ContractInfo;
+
+--Parent Org Name
+CREATE MULTISET VOLATILE TABLE Ref_ParentOrg AS (
+select contract.ContractID,
+contract.ParentOrganization
+from CMS_CORE_V.Ref_CMS_ContractInfo as contract inner join
+(select Max(MidMonthDate) as MaxMonth,ContractID from CMS_CORE_V.Ref_CMS_ContractInfo group by ContractID) as MaxMonth
+ON contract.MidMonthDate = MaxMonth.MaxMonth AND
+contract.ContractID = MaxMonth.ContractID
+)WITH DATA PRIMARY INDEX(ContractID) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (ContractID) ON Ref_ParentOrg;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (STATE ,COUNTY)
+ON CMS_CORE_T.Ref_CMS_LandscapeSourcefileSNP;
+COLLECT STATS
+COLUMN (STATE ,COUNTY)
+ON CMS_CORE_T.Ref_CMS_LandscapeSourcefileMA;
+
+--Landscape Table
+--MJH Edit 2022.10.06: adding logic to capture plans that are not renewed
+CREATE VOLATILE TABLE Ref_LandscapeMA_Prelim AS (
+--SNP Plans
+select extract(year from midmonthdate) as PlanYear,
+Contract_ID,
+right('000' || trim(PLan_ID),3) as Plan_ID,
+right('000' || trim(Segment_ID),3) as Segment_ID,
+Contract_ID || '-' || right('000' || trim(PLan_ID),3) || '-' || right('000' || trim(Segment_ID),3) as Contract_PBP_Segment,
+OREPLACE(Type_of_medicare_health_plan,' *','') as PlanType,
+Special_Needs_Plan_Type,
+case when Special_Needs_Plan_Type = 'Institutional' then 'I-SNP'
+when Special_Needs_Plan_Type = 'Dual-Eligible' then 'D-SNP'
+when Special_Needs_Plan_Type = 'Chronic or Disabling Condition' then 'C-SNP'
+else 'Unknown' end as PlanTypeReporting,
+Organization_Name,
+Monthly_Consolidated_Premium,
+CASE WHEN Monthly_Consolidated_Premium = 0.00 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium = 0 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium > 0.00 AND Monthly_Consolidated_Premium <= 30.99 THEN '$1 to $30 Premium'
+WHEN Monthly_Consolidated_Premium >= 31.00 AND Monthly_Consolidated_Premium <= 60.00 THEN '$31 to $60 Premium'
+WHEN Monthly_Consolidated_Premium > 60.00 THEN 'Over $60 Premium' end PremiumBand,
+State,
+County,
+SSA.SSA
+from CMS_CORE_V.Ref_CMS_LandscapeSourcefileSNP as LM
+left join BUSINESS_OPS_CORE_V.LU_SSA_STATE_COUNTY AS SSA
+
+ON LM.State = SSA.StateName AND
+LM.County = SSA.CountyName
+union ALL
+--NON-SNP Plans
+select extract(year from midmonthdate) as PlanYear,
+Contract_ID,
+right('000' || trim(PLan_ID),3) as Plan_ID,
+right('000' || trim(Segment_ID),3) as Segment_ID,
+Contract_ID || '-' || right('000' || trim(PLan_ID),3) || '-' || right('000' || trim(Segment_ID),3) as Contract_PBP_Segment,
+OREPLACE(Type_of_medicare_health_plan,' *','') as PlanType,
+'N/A' as Special_Needs_Plan_Type,
+case when Drug_Benefit_Type is null and Type_of_Medicare_Health_Plan like '%HMO%' then 'MA Only - HMO'
+when Drug_Benefit_Type is null and Type_of_Medicare_Health_Plan like '%PPO%' then 'MA Only - PPO'
+when Type_of_Medicare_Health_Plan like '%PPO%' then 'PPO'
+when Type_of_Medicare_Health_Plan like '%HMO%' then 'HMO'
+when Type_of_Medicare_Health_Plan like '%PFFS%' then 'PFFS'
+when Type_of_Medicare_Health_Plan like '%Cost%' then 'Cost'
+when Type_of_Medicare_Health_Plan like '%MSA%' then 'MSA'
+else 'Unknown' end as PlanTypeReporting,
+Organization_Name,
+Monthly_Consolidated_Premium,
+CASE WHEN Monthly_Consolidated_Premium = 0.00 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium = 0 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium > 0.00 AND Monthly_Consolidated_Premium <= 30.99 THEN '$1 to $30 Premium'
+WHEN Monthly_Consolidated_Premium >= 31.00 AND Monthly_Consolidated_Premium <= 60.00 THEN '$31 to $60 Premium'
+WHEN Monthly_Consolidated_Premium > 60.00 THEN 'Over $60 Premium' end PremiumBand,
+State,
+County,
+SSA.SSA
+from CMS_CORE_V.Ref_CMS_LandscapeSourcefileMA as LM
+left join BUSINESS_OPS_CORE_V.LU_SSA_STATE_COUNTY AS SSA
+
+ON LM.State = SSA.StateName AND
+LM.County = SSA.CountyName
+union ALL
+--MMP Plans
+select extract(year from midmonthdate) as PlanYear,
+Contract_ID,
+right('000' || trim(PLan_ID),3) as Plan_ID,
+'000' as Segment_ID,
+Contract_ID || '-' || right('000' || trim(PLan_ID),3) || '-000' as Contract_PBP_Segment,
+'MMP' as PlanType,
+'N/A' as Special_Needs_Plan_Type,
+'MMP' as PlanTypeReporting,
+Organization_Name,
+Monthly_Consolidated_Premium,
+CASE WHEN Monthly_Consolidated_Premium = 0.00 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium = 0 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium > 0.00 AND Monthly_Consolidated_Premium <= 30.99 THEN '$1 to $30 Premium'
+WHEN Monthly_Consolidated_Premium >= 31.00 AND Monthly_Consolidated_Premium <= 60.00 THEN '$31 to $60 Premium'
+WHEN Monthly_Consolidated_Premium > 60.00 THEN 'Over $60 Premium' end PremiumBand,
+State,
+County,
+SSA.SSA
+from CMS_CORE_V.Ref_CMS_LandscapeSourcefileMMP as LM
+left join BUSINESS_OPS_CORE_V.LU_SSA_STATE_COUNTY AS SSA
+
+ON LM.State = SSA.StateName AND
+LM.County = SSA.CountyName
+UNION ALL
+--PDP Plans
+select extract(year from midmonthdate) as PlanYear,
+Contract_ID,
+right('000' || trim(PLan_ID),3) as Plan_ID,
+'000' as Segment_ID,
+Contract_ID || '-' || right('000' || trim(PLan_ID),3) || '-000' as Contract_PBP_Segment,
+'PDP' as PlanType,
+'N/A' as Special_Needs_Plan_Type,
+'PDP' as PlanTypeReporting,
+Company_Name as Organization_Name,
+Monthly_Drug_Premium as Monthly_Consolidated_Premium,
+CASE WHEN Monthly_Consolidated_Premium = 0.00 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium = 0 THEN '$0 Premium'
+WHEN Monthly_Consolidated_Premium > 0.00 AND Monthly_Consolidated_Premium <= 30.99 THEN '$1 to $30 Premium'
+WHEN Monthly_Consolidated_Premium >= 31.00 AND Monthly_Consolidated_Premium <= 60.00 THEN '$31 to $60 Premium'
+WHEN Monthly_Consolidated_Premium > 60.00 THEN 'Over $60 Premium' end PremiumBand,
+State,
+'N/A' as County,
+'N/A' as SSA
+from CMS_CORE_V.Ref_CMS_LandscapeSourcefilePDP as LM)
+WITH DATA PRIMARY INDEX (PlanYear, SSA, Contract_PBP_Segment) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (PlanYear, SSA, Contract_PBP_Segment) ON Ref_LandscapeMA_Prelim;
+
+CREATE VOLATILE TABLE Ref_LandscapeMA AS (
+select *
+from Ref_LandscapeMA_Prelim
+
+union ALL
+
+select PlanYear+1 as PlanYear,
+Contract_ID,
+Plan_ID,
+Segment_ID,
+Contract_PBP_Segment,
+PlanType,
+Special_Needs_Plan_Type,
+PlanTypeReporting,
+Organization_Name,
+Monthly_Consolidated_Premium,
+PremiumBand,
+State,
+County,
+SSA
+from Ref_LandscapeMA_Prelim)
+WITH DATA PRIMARY INDEX (PlanYear, SSA, Contract_PBP_Segment) ON COMMIT PRESERVE ROWS;
+--MJH Edit 2022.10.06: end edits
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN(PLANYEAR,CONTRACT_ID,PLAN_ID,SEGMENT_ID,CONTRACT_PBP_SEGMENT),
+COLUMN(SSA),
+COLUMN(ORGANIZATION_NAME),
+COLUMN(PLANTYPEREPORTING)
+ON Ref_LandscapeMA;
+
+DROP TABLE Ref_LandscapeMA_Prelim;
+
+--Define plan type and premium band for each plan by year
+CREATE VOLATILE TABLE Ref_PlanType_And_Prem AS (
+select PlanYear,
+Contract_PBP_Segment,
+Contract_ID,
+Plan_ID,
+Segment_ID,
+PlanTypeReporting,
+Monthly_Consolidated_Premium,
+PremiumBand
+from Ref_LandscapeMA)
+WITH DATA PRIMARY INDEX (PlanYear, Contract_PBP_Segment) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (PlanYear, Contract_PBP_Segment) ON Ref_PlanType_And_Prem;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (PLANYEAR ,CONTRACT_ID ,PLAN_ID),
+COLUMN (PLANYEAR ,CONTRACT_PBP_SEGMENT)
+ON Ref_PlanType_And_Prem;
+COLLECT STATS
+COLUMN(REGION ,MARKET),
+COLUMN(STATE ,COUNTY ,SUBMARKET,MICROMARKET)
+ON BUSINESS_OPS_CORE_T.LU_MARKET_MAPPINGS_SOURCE;
+
+--Region & Market Mapping Ind MA
+CREATE VOLATILE TABLE Ref_Region_Market_Ind_MA AS (
+select PlanYear,
+Contract_ID,
+Plan_ID,
+Segment_ID,
+Contract_PBP_Segment,
+--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Region,
+case when PlanYear = 2023 AND Contract_PBP_Segment in ('H4513-048-000','H4513-056-002') AND CMS.SSA = '01560' then 'Southeast'
+when PlanYear = 2023 AND Contract_PBP_Segment in ('H7849-068-000','H7849-069-000') AND CMS.SSA = '01560' then 'Southeast'
+else Region end Region,--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Market
+--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Market
+case when PlanYear = 2023 AND Contract_PBP_Segment in ('H4513-048-000','H4513-056-002') AND CMS.SSA = '01560' then 'Alabama'
+when PlanYear = 2023 AND Contract_PBP_Segment in ('H7849-068-000','H7849-069-000') AND CMS.SSA = '01560' then 'Georgia'
+else Market end Market--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Market
+from Ref_LandscapeMA as CMS inner join BUSINESS_OPS_CORE_V.LU_MARKET_MAPPINGS_SOURCE as Mkt
+ON CMS.SSA = Mkt.SSA
+where (Organization_Name like 'Cigna%' OR
+Organization_Name like '%HealthSpring%' OR
+Organization_Name like '%Health Spring%' OR
+Organization_Name like '%Bravo%') AND
+PlanTypeReporting <> 'PDP'
+group by PlanYear,
+Contract_ID,
+Plan_ID,
+Segment_ID,
+Contract_PBP_Segment,
+--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Region,
+case when PlanYear = 2023 AND Contract_PBP_Segment in ('H4513-048-000','H4513-056-002') AND CMS.SSA = '01560' then 'Southeast'
+when PlanYear = 2023 AND Contract_PBP_Segment in ('H7849-068-000','H7849-069-000') AND CMS.SSA = '01560' then 'Southeast'
+else Region end,--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Market
+--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Market
+case when PlanYear = 2023 AND Contract_PBP_Segment in ('H4513-048-000','H4513-056-002') AND CMS.SSA = '01560' then 'Alabama'
+when PlanYear = 2023 AND Contract_PBP_Segment in ('H7849-068-000','H7849-069-000') AND CMS.SSA = '01560' then 'Georgia'
+else Market end)--MJH Update 2022.10.04: fixing Russell County AL mapping problem that causes dups --Market)
+WITH DATA PRIMARY INDEX (PlanYear, Contract_PBP_Segment) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (PlanYear, Contract_PBP_Segment) ON Ref_Region_Market_Ind_MA;
+
+--Submarket & Micromarket Mapping Ind MA
+CREATE VOLATILE TABLE Ref_Submarket_Micromarket_Ind_MA AS (
+select PlanYear,
+Contract_ID,
+Plan_ID,
+Segment_ID,
+Contract_ID || '-' || Plan_ID || '-' || Segment_ID as Contract_PBP_Segment,
+CMS.SSA,
+SubMarket,
+MicroMarket,
+Mkt.State || ' - ' || Mkt.county as Report_State_County
+from Ref_LandscapeMA as CMS inner join BUSINESS_OPS_CORE_V.LU_MARKET_MAPPINGS_SOURCE as Mkt
+ON CMS.SSA = Mkt.SSA
+where (Organization_Name like 'Cigna%' OR
+Organization_Name like '%HealthSpring%' OR
+Organization_Name like '%Health Spring%' OR
+Organization_Name like '%Bravo%') AND
+PlanTypeReporting <> 'PDP'
+group by PlanYear,
+Contract_ID,
+Plan_ID,
+Segment_ID,
+Contract_ID || '-' || Plan_ID || '-' || Segment_ID,
+CMS.SSA,
+SubMarket,
+MicroMarket,
+Mkt.State || ' - ' || Mkt.county)
+WITH DATA PRIMARY INDEX (PlanYear,SSA, Contract_PBP_Segment) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (PlanYear,SSA, Contract_PBP_Segment) ON Ref_Submarket_Micromarket_Ind_MA;
+
+DROP TABLE Ref_LandscapeMA;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (PLANID),
+COLUMN (PLANTYPE)
+ON QNXT_CORE_T.ENROLLKEYS;
+COLLECT STATS
+COLUMN (PROGRAMID),
+COLUMN (PLANID)
+ON QNXT_CORE_T.BENEFITPLAN;
+COLLECT STATS
+COLUMN (( CASE WHEN ((TD_SYSFNLIB.ASCII (ATTRIBUTEID ))= 0) THEN ('') ELSE (ATTRIBUTEID) END )) AS ST_280411190598_0_MEMBERATTRIBUTE
+ON QNXT_CORE_T.MEMBERATTRIBUTE;
+
+--Member / Agent lookup table (QNXT)
+--MJH: 2022.07.22 --> is this still needed because we are moving to the agent datamart table
+CREATE MULTISET VOLATILE TABLE AgentReference AS (
+select ma.thevalue,
+ek.carriermemid,
+ek.effdate,
+ek.TERMDATE
+
+FROM QNXT_CORE_V.ENROLLKEYS ek
+INNER JOIN QNXT_CORE_V.MEMBER m
+ON ek.MEMID = m.MEMID and
+ek.plantype in ('Medical', 'GroupMA') AND
+ek.EFFDATE <> EK.TERMDATE
+
+INNER JOIN QNXT_CORE_V.MEMBERATTRIBUTE ma
+ON ma.MEMID = ek.MEMID AND
+ek.effdate >= ma.EFFDATE and
+ek.effdate < ma.termDATE
+
+where ma.ATTRIBUTEID = 'C08712629' AND --attribure for Agent ID
+ma.THevalue <>''
+)WITH DATA PRIMARY INDEX(thevalue) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (thevalue) ON AgentReference;
+
+COLLECT STATS
+COLUMN (( CASE WHEN ((TD_SYSFNLIB.ASCII (HOSPAFFILTYPE ))= 0) THEN ('') ELSE (HOSPAFFILTYPE) END )) AS T_280411265617_1_AFFILIATION,
+COLUMN (( CASE WHEN ((TD_SYSFNLIB.ASCII (AFFILTYPE ))= 0) THEN ('') ELSE (AFFILTYPE) END )) AS ST_280411265617_0_AFFILIATION
+ON QNXT_CORE_T.AFFILIATION;
+
+--P4Q Table
+CREATE MULTISET VOLATILE TABLE Ref_P4Q AS (
+SELECT PROVID,
+MIN(EFFDATE) AS EFFDATE,
+MAX(TERMDATE) AS TERMDATE,
+count(*) as CNT
+FROM QNXT_CORE_V.AFFILIATION
+WHERE AFFILTYPE = 'QUALITY' AND
+HOSPAFFILTYPE IN ('P4Q','P4Q2','ACE')
+GROUP BY PROVID
+)WITH DATA PRIMARY INDEX(PROVID, EFFDATE, TERMDATE) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (PROVID, EFFDATE, TERMDATE) ON Ref_P4Q;
+
+--County Expansion Year
+CREATE MULTISET VOLATILE TABLE Ref_ExpansionYear AS (
+select SSA,
+min(RecordYear) as MinRecordYear,
+case when min(RecordYear)<2020 then 'Pre-2020'
+else cast(min(RecordYear) as varchar(4)) end as ExpansionYear
+
+from REPORTING_V.REF_IND_MA_COUNTY_PRODUCT_EXPANSION_LOOKUP
+where ParentOrganization = 'Cigna'
+group by SSA
+)WITH DATA PRIMARY INDEX(SSA) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (SSA) ON Ref_ExpansionYear;
+
+--Original Start Date
+CREATE MULTISET VOLATILE TABLE Ref_OriginalStartDate AS (
+select MemberID,
+min(ContinuousEffectiveDate) OriginalStartDate
+FROM OSS_PROVISIONING_V.sdoGBSAEnrollment as enroll
+where enroll.productType = 'medicare' --exclude PDP data
+group by MemberID
+)WITH DATA PRIMARY INDEX(MemberID) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (MemberID) ON Ref_OriginalStartDate;
+
+--end region
+
+--MJH: 2022.07.22 edit --> adding lookup table for SourceMemberKey to link to agent dim table
+CREATE MULTISET VOLATILE TABLE Ref_SourceMemberKey AS (
+select ReportDate, MedicareID, MemberID, SourceMemberKey
+from OSS_PROVISIONING_V.cdoMemberDemographicsMonthly
+)WITH DATA PRIMARY INDEX(ReportDate,MedicareID, MemberID) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (ReportDate,MedicareID) ON Ref_SourceMemberKey;
+
+-- CREATE MULTISET VOLATILE TABLE LUCompPlan AS (
+-- select distinct A.PlanYear, B.ParentOrganization, A.Contract_ID, A.Plan_ID, A.PlanTypeReporting
+-- from REPORTING_V.LU_CMS_Landscape A left join REPORTING_V.LU_CMS_PARENT_ORGANIZATION B
+-- on A.Contract_ID = B.ContractID
+-- )WITH DATA PRIMARY INDEX(contract_id) ON COMMIT PRESERVE ROWS ;
+
+
+--region TRR
+---leverage one reply table to get transaction dates from all data instead of one come dis and one for members
+--MJH: 2022.07.22 --> is this still needed?
+CREATE MULTISET VOLATILE TABLE CMS_Trans_ReplyData_Dim_VT AS (
+select *
+from (
+select
+trr.Medicareid,
+trr.contractid,
+trr.pbpcode,
+trr.sourceid,
+oreplace(prevpartdcontractid,'_','') Prior_HCode_PBP,
+left(Prior_HCode_PBP,5) as Prior_HCode,
+right(Prior_HCode_PBP,3) as Prior_PBP,
+trr.transactionReplyCode,
+trr.TRCShortName,
+trr.electiontype,
+case when trr.Transactiondatekey / 10000 BETWEEN 1900 AND 9999 then CAST(CAST(trr.Transactiondatekey AS CHAR(8)) AS DATE FORMAT 'YYYYMMDD')
+else null end AS TransactionDate,
+case when trr.EffectiveDateKey / 10000 BETWEEN 1900 AND 9999 then CAST(CAST(trr.EffectiveDateKey AS CHAR(8)) AS DATE FORMAT 'YYYYMMDD')
+else null end AS EffectiveDate,
+case when trr.transactionReplyCode in ('011','117','118','701','11') then 'Enrollment'
+when trr.transactionReplyCode in ('16','016') then 'Enrollment-OOA'
+when trr.DisenrollmentReasonCode is not null and DisenrollmentReasonCode <> ' ' then 'Disenrollment' end as RecType,
+DisenrollmentReasonCode as DECode,
+Case when rectype='Dise
+nrollment' then trr.sourceid
+when rectype='Enrollment' then left(Prior_HCode_PBP,5) END as CompetitorContract
+from CMS_CORE_V.CMS_Trans_ReplyData_Dim trr
+where transactionReplyCode in ('11','117','118','701','16','011','016')
+OR (DisenrollmentReasonCode is not null and filetypecode = 'Daily'
+and DisenrollmentReasonCode <> ' '
+and disenrollmentreasoncode not in ('18')
+and transactionReplyCode not in ('120','185','050','052'))) TRRDATA
+
+where rectype is not null
+) WITH DATA PRIMARY INDEX(Medicareid, effectivedate,contractid,pbpcode) ON COMMIT PRESERVE ROWS;
+
+-- COLLECT STATS COLUMN (Medicareid, effectivedate,contractid,pbpcode) ON CMS_Trans_ReplyData_Dim_VT;
+
+collect stats on CMS_Trans_ReplyData_Dim_VT column DECode;
+collect stats on CMS_Trans_ReplyData_Dim_VT column sourceid;
+collect stats on CMS_Trans_ReplyData_Dim_VT column Prior_HCode;
+
+CREATE MULTISET VOLATILE TABLE TRRResults AS (
+select
+trr.Medicareid,
+trr.contractid,
+trr.pbpcode,
+Prior_HCode_PBP,
+Prior_HCode,
+Prior_PBP,
+trr.transactionReplyCode,
+trr.TRCShortName,
+trr.electiontype,
+TransactionDate,
+EffectiveDate,
+RecType,
+DECode,
+case when DECode is not null then c.Disenroll_Type END as DEType,
+case when DECode is not null then c.DisenrollmentReason END as DEDesc,
+CaSE when DECode is null then null
+when DEDesc in ('DISENROLLMENT BECAUSE OF ENROLLMENT IN ANOTHER PLAN','VOLUNTARY DISENROLLMENT THROUGH PLAN') then 'Plan Move'
+When DEdesc in ('LOSS OF PART A ENTITLEMENT (PLAN-SPECIFIC)','LOSS OF PART B ENTITLEMENT') THEN 'Loss of Entitlement'
+When DEdesc = 'LOST SPECIFIC PLAN ELIGIBILITY (SNP ONLY)' Then 'SNP Eligibility'
+When DEdesc = 'RELOCATION OUT OF PLAN SERVICE AREA' Then 'Relocation'
+When DEDesc = 'Report of Death' then 'Death'
+Else 'Other'
+End as DECategory,
+CompetitorContract,
+Case when rectype='Disenrollment' then d."Parent Organization"
+when rectype='Enrollment' then nd."Parent Organization" END as CompetitorName,
+d.PlanType as CompetitorPlanType
+from CMS_Trans_ReplyData_Dim_VT trr
+left join (Select Code, DisenrollmentReason, Case when CODE in ('11','12','14','13') then 'Voluntary' else 'Involuntary' End as Disenroll_Type
+From BUSINESS_OPS_CORE_V.LU_TRR_DRC) c
+on trr.DECode = c.Code
+left join BUSINESS_OPS_CORE_V.LU_CMSCONTRACTS d
+on trr.sourceid = d.contract
+left join BUSINESS_OPS_CORE_V.LU_CMSCONTRACTS nd
+on trr.Prior_HCode = nd.contract
+) WITH DATA PRIMARY INDEX(Medicareid, effectivedate,contractid,pbpcode) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (Medicareid, effectivedate,contractid,pbpcode) ON TRRResults;
+
+DROP TABLE CMS_Trans_ReplyData_Dim_VT;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (RECTYPE),
+COLUMN (EXTRACT(DAY FROM (EffectiveDate))) AS ST_280411533114_0_TRRResults,
+COLUMN (MEDICAREID ,CONTRACTID ,EFFECTIVEDATE),
+COLUMN (PRIOR_HCODE ,PRIOR_PBP)
+ON TRRResults;
+
+update TRRResults
+set EffectiveDate = ADD_MONTHS(EffectiveDate - EXTRACT(DAY FROM EffectiveDate)+1, 1) ---
+where rectype = 'disenrollment'
+and extract(day from EffectiveDate)<>1; --- removed because causing issues with event dates
+
+/*update TRRResults
+set EffectiveDate = ADD_MONTHS(EffectiveDate - EXTRACT(DAY FROM EffectiveDate)+1, 0)
+where rectype = 'disenrollment'
+and extract(day from EffectiveDate)= 1; --- removed because causing issues with event dates
+update TRRResults
+set EffectiveDate = ADD_MONTHS(EffectiveDate - EXTRACT(DAY FROM EffectiveDate)+1, 0)
+where rectype <> 'disenrollment';*/ --Removing because they don't do anything
+
+--Join TRR to Landscape table to get the prior plan info
+CREATE MULTISET VOLATILE TABLE TRRResults_Updated AS (
+select final.*
+from
+(select TRR.*,
+contract.ParentOrganization,
+plan.PlanTypeReporting,
+--MJH Edit (2022.11.10): sort by transaction date ascending
+ROW_NUMBER() OVER (PARTITION BY TRR.MedicareID,TRR.EffectiveDate,TRR.contractid ORDER BY TRR.transactiondate asc/*desc*/, TRR.TransactionReplyCode) reccnt
+from TRRResults as TRR left join Ref_ParentOrg as contract
+on TRR.Prior_HCode = contract.ContractID
+
+left join Ref_PlanType_And_Prem as plan
+ON TRR.Prior_HCode = plan.Contract_ID AND
+TRR.Prior_PBP = plan.Plan_ID AND
+extract(year from (TRR.EffectiveDate - Interval '1' month))= plan.PlanYear) As final
+where reccnt = 1
+) WITH DATA PRIMARY INDEX(Medicareid, effectivedate,contractid,pbpcode) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (Medicareid, effectivedate,contractid,pbpcode) ON TRRResults_Updated;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (MEDICAREID),
+COLUMN (EFFECTIVEDATE),
+COLUMN (MEDICAREID ,EFFECTIVEDATE),
+COLUMN (RECTYPE),
+COLUMN (MEDICAREID ,CONTRACTID)
+ON TRRResults_Updated;
+
+drop table TRRResults;
+DROP TABLE Ref_ParentOrg;
+
+--END REGION
+
+--REGION Main Enrollment Code
+-----------------------------------------Build Files-------------------------
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (REPORTDATE ,MEMBERID)
+ON REPORTING_T.SDO_GBSA_ENRLMT;
+
+CREATE VOLATILE TABLE enroll AS (
+SELECT ENROLL.ReportDate,
+ENROLL.ReportBeginDate,
+ENROLL.ReportEndDate,
+ENROLL.ContinuousEffectiveDate,
+ENROLL.DeathDate,
+ENROLL.DerivedIndividualEnterpriseID AS IndividualEnterpriseID,
+ENROLL.MemberID,
+CASE WHEN ENROLL.MedicareID = 'U' THEN NULL ELSE ENROLL.MedicareID END AS MedicareID,
+--MJH: 2022.07.22 removed HICN and MBI lkp (may need to add back later but pulled out as potential dups)
+/*case when mbi.hicn is not null then mbi.hicn
+when mbi.hicn is null and mbi2.hicn is not null then mbi2.hicn
+else null
+end as HICN,
+case when mbi.mbi is not null then mbi.mbi
+when mbi.mbi is null and mbi2.mbi is not null then mbi2.mbi
+else null
+end as MBI,*/
+ENROLL.MedicaidID,
+ENROLL.MemberLast,
+ENROLL.MemberFirst,
+ENROLL.MemberMiddle,
+ENROLL.DateofBirth,
+ENROLL.Age,
+ENROLL.Gender,
+ENROLL.LanguageDesc,
+ENROLL.MemberCounty,
+ENROLL.MemberState,
+ENROLL.MemberZip,
+ENROLL.MemberLatitude,
+ENROLL.MemberLongitude,
+ENROLL.RegionCode,
+ENROLL.HHVIDesc,
+ENROLL.PCPNPI,
+ENROLL.PCPTIN,
+ENROLL.PCPID,
+ENROLL.PCPName,
+ENROLL.PCPCounty,
+ENROLL.PCPState,
+ENROLL.ProviderLatitude,
+ENROLL.ProviderLongitude,
+ENROLL.LOBCode,
+ENROLL.ProductType,
+ENROLL.PlanType,
+ENROLL.SNPType,
+ENROLL.PlanName,
+ENROLL.MMRStateCountyCode,
+ENROLL.MMRCounty,
+ENROLL.MMRState,
+ENROLL.EngagementCode,
+ENROLL.Engagement,
+ENROLL.HCODE,
+ENROLL.ContractIDPBPSegment,
+ENROLL.PBP,
+ENROLL.SegmentID,
+ENROLL.GroupID,
+ENROLL.EGWPIndicator,
+ENROLL.BusinessName,
+ENROLL.OperationalMarket,
+ENROLL.RegulatoryMarket,
+ENROLL.OperationalSubMarket,
+ENROLL.ManagingEntity,
+ENROLL.ReportingPod,
+ENROLL.PodCode,
+ENROLL.PodName,
+ENROLL.CMSDualStatusCode,
+ENROLL.CMSDualStatusCodeDesc,
+ENROLL.MediMediFlag,
+ENROLL.ESRDFlag,
+ENROLL.WorkingAgeFlag,
+ENROLL.InstFlag,
+ENROLL.HospiceFlag,
+ENROLL.LISFlag,
+ENROLL.HospiceMMRFlag,
+ENROLL.ESRDMMRFlag,
+ENROLL.RiskScore,
+ENROLL.SourceDataKey,
+ENROLL.SnapShotDate,
+ENROLL.AttributedPCPIndicator,
+ENROLL.EMPLR_GRP_ID,
+ENROLL.EMPLR_GRP_ACCT_NUM,
+ENROLL.EMPLR_GRP_NM,
+ENROLL.EMPLR_GRP_BEN_OPT_ID,
+ENROLL.EMPLR_GRP_BEN_OPT_NM,
+ENROLL.EMPLR_GRP_BRNCH_ID,
+ENROLL.EMPLR_GRP_BRNCH_NM,
+ENROLL.EMPLR_GRP_EFF_DT,
+ENROLL.EMPLR_GRP_TERM_DT,
+ENROLL.PRODT_SUB_TY,
+extract(year from enroll.Reportbegindate) EventYear,
+extract(year from enroll.ContinuousEffectiveDate) as EffectiveYear,
+EventYear - EffectiveYear + 1 as CustomerDuration,
+case when customerDuration >=5 then '5+' else trim(cast(CustomerDuration as varchar(1))) end as CustomerDurationBand, --MJH: 2022.07.22 fixed error that was previously there from ebony's original code; was >5 not is >=5
+ENROLL.HCODE|| '_' || ENROLL.PBP as ContractPBP,
+ENROLL.HCODE || '-' || ENROLL.PBP || '-' || ENROLL.SegmentID as Contract_PBP_Segment,
+row_number() over (PARTITION by ENROLL.ReportDate, ENROLL.MemberID ORDER by case when ENROLL.MMRCounty = 'U' then 1000 else 1 end) as DupCheck
+
+
+FROM OSS_PROVISIONING_V.sdoGBSAEnrollment as enroll
+--MJH: 2022.07.22 removed HICN and MBI lkp (may need to add back later but pulled out as potential dups)
+where EXTRACT (YEAR FROM ReportDate) between (select MinYear from ReportYearReference)-1 AND (select MaxYear from ReportYearReference) AND
+enroll.productType = 'medicare' --exclude PDP data
+) WITH DATA PRIMARY INDEX(MemberID, MedicareID,ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID,ReportDate) ON enroll;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (MEDICAREID),
+COLUMN (REPORTBEGINDATE),
+COLUMN (REPORTENDDATE),
+COLUMN (REPORTDATE ,MEMBERID ,MEDICAREID),
+COLUMN (DUPCHECK)
+ON enroll;
+
+/***********TRYING TO ADD EVENT DATES IN TO TEST DISENROLLMENT DATES*****************/
+CREATE VOLATILE TABLE trrDE AS (
+
+select
+a.Memberid
+,a.reportDate
+,a.ReportBeginDate
+,a.ReportEndDate
+,a.MedicareID
+--,a.HICN
+--,a.MBI
+/*
+,d.DisenrollmentReasonCode as MedicareID_DECode1
+,e.DisenrollmentReasonCode as HICN_DECode1
+,f.DisenrollmentReasonCode as MBI_DECode1
+,d2.DisenrollmentReasonCode as MedicareID_DECode2
+,e2.DisenrollmentReasonCode as HICN_DECode2
+,f2.DisenrollmentReasonCode as MBI_DECode2
+,case when d.DisenrollmentReasonCode is not null then d.DisenrollmentReasonCode
+when f.DisenrollmentReasonCode is not null then f.DisenrollmentReasonCode
+when e.DisenrollmentReasonCode is not null then e.DisenrollmentReasonCode
+when d2.DisenrollmentReasonCode is not null then d2.DisenrollmentReasonCode
+when f2.DisenrollmentReasonCode is not null then f2.DisenrollmentReasonCode
+when e2.DisenrollmentReasonCode is not null then e2.DisenrollmentReasonCode
+else NULL
+end as DECode
+,case when d.ElectionType is not null then d.ElectionType
+when f.ElectionType is not null then f.ElectionType
+when e.ElectionType is not null then e.ElectionType
+when d2.ElectionType is not null then d2.ElectionType
+when f2.ElectionType is not null then f2.ElectionType
+when e2.ElectionType is not null then e2.ElectionType
+else NULL
+end as ElectionType
+,case when d.SourceID is not null then d.SourceID
+when f.SourceID is not null then f.SourceID
+when e.SourceID is not null then e.SourceID
+when d2.SourceID is not null then d2.SourceID
+when f2.SourceID is not null then f2.SourceID
+when e2.SourceID is not null then e2.SourceID
+else NULL
+end as SourceID*/
+
+--MJH: 2022.07.22 removed HICN and MBI lkp (may need to add back later but pulled out as potential dups)
+,case when d.transactiondate is not null then d.transactiondate
+--when f.transactiondate is not null then f.transactiondate
+--when e.transactiondate is not null then e.transactiondate
+when d2.transactiondate is not null then d2.transactiondate
+--when f2.transactiondate is not null then f2.transactiondate
+--when e2.transactiondate is not null then e2.transactiondate
+else NULL
+end as transactiondate
+
+--MJH: 2022.07.22 removed HICN and MBI lkp (may need to add back later but pulled out as potential dups)
+,case when d.EffectiveDate is not null then d.EffectiveDate
+--when f.EffectiveDate is not null then f.EffectiveDate
+--when e.EffectiveDate is not null then e.EffectiveDate
+when d2.EffectiveDate is not null then d2.EffectiveDate
+--when f2.EffectiveDate is not null then f2.EffectiveDate
+--when e2.EffectiveDate is not null then e2.EffectiveDate
+else NULL
+end as EffectiveDate,
+--MJH Edit (2022.11.10)
+row_number() over (partition by a.Memberid,A.MedicareID,a.reportDate order by case when d.transactiondate is not null then d.transactiondate when d2.transactiondate is not null then d2.transactiondate else NULL end) as Row_Num
+
+from enroll a
+
+/********************** last enrollment record *************************/
+/*MedicareID first*/
+left join TRRResults_Updated d
+on a.Medicareid = d.MedicareID
+and d.effectivedate between a.ReportBeginDate and a.ReportEndDate
+--and d.rowno = 1
+
+--MJH: 2022.07.22 removed HICN and MBI lkp (may need to add back later but pulled out as potential dups)
+/*HICN second*/
+/*left join TRRResults_Updated e
+on a.HICN = e.MedicareID
+and e.effectivedate between a.ReportBeginDate and a.ReportEndDate
+--and e.rowno = 1*/
+
+/*MBI third*/
+/*left join TRRResults_Updated f
+on a.MBI = f.MedicareID
+and f.effectivedate between a.ReportBeginDate and a.ReportEndDate
+--and f.rowno = 1*/
+
+/********************** following month if we can't find TRR record for last enrollment record *************************/
+/*MedicareID first*/
+left join TRRResults_Updated d2
+on a.Medicareid = d2.MedicareID
+and d2.effectivedate between (ADD_MONTHS (a.ReportBeginDate , +1)) and (ADD_MONTHS (a.ReportEndDate , +1))
+--and d2.rowno = 1
+
+--MJH: 2022.07.22 removed HICN and MBI lkp (may need to add back later but pulled out as potential dups)
+/*HICN second*/
+/*left join TRRResults_Updated e2
+on a.HICN = e2.MedicareID
+and e2.effectivedate between (ADD_MONTHS (a.ReportBeginDate , +1)) and (ADD_MONTHS (a.ReportEndDate , +1))
+--and e2.rowno = 1*/
+
+/*MBI third*/
+/*left join TRRResults_Updated f2
+on a.MBI = f2.MedicareID
+and f2.effectivedate between (ADD_MONTHS (a.ReportBeginDate , +1)) and (ADD_MONTHS (a.ReportEndDate , +1))
+--and f2.rowno = 1*/
+
+where (d.rectype='disenrollment' or-- e.rectype='disenrollment' or f.rectype='disenrollment' or
+d2.rectype='disenrollment' /*or e2.rectype='disenrollment' or f2.rectype='disenrollment' */)
+
+) WITH DATA PRIMARY INDEX (MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON trrDE;
+
+--MJH Edit (2022.11.10): delete duplicate rows
+delete
+from trrDE
+where row_num <> 1;
+
+--update trrde
+-- set transactiondate = case when Transactiondatekey / 10000 BETWEEN 1900 AND 9999 then CAST(CAST(Transactiondatekey AS CHAR(8)) AS DATE FORMAT 'YYYYMMDD')
+-- else null end AS TransactionDate,
+-- set effectivedate = case when EffectiveDateKey / 10000 BETWEEN 1900 AND 9999 then CAST(CAST(EffectiveDateKey AS CHAR(8)) AS DATE FORMAT 'YYYYMMDD')
+-- else null end AS EffectiveDate;
+
+--update TRRde
+--set EffectiveDate = ADD_MONTHS(EffectiveDate - EXTRACT(DAY FROM EffectiveDate)+1, 1)
+
+
+
+
+--Identify duplicate records in enroll temp table; write duplicates to a table
+DELETE FROM REPORTING_T.GR_OSS_ENROLLMENT_MEDICARE_DUPLICATES ALL;
+INSERT INTO REPORTING_T.GR_OSS_ENROLLMENT_MEDICARE_DUPLICATES
+select *
+from enroll
+where dupCheck >1
+;
+
+--create a table to track the row counts for each step in this process
+CREATE VOLATILE TABLE data_quality_checks AS (
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 01: Create initial enrollment temp table' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from enroll
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM OSS_PROVISIONING_V.sdoGBSAEnrollment as enroll
+where EXTRACT (YEAR FROM ReportDate) between (select MinYear from ReportYearReference) AND (select MaxYear from ReportYearReference) AND
+enroll.productType = 'medicare') final
+) WITH DATA NO PRIMARY INDEX ON COMMIT PRESERVE ROWS ;
+
+
+--delete duplicate records from enroll temp table
+CREATE VOLATILE TABLE enroll2 AS (
+select *
+from enroll
+where dupCheck = 1
+) WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON enroll2;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 02: Remove duplicates; difference should match step 1 dup count.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from enroll2
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll) final;
+
+drop table enroll;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (MEMBERID),
+COLUMN (PCPCOUNTY ,PCPSTATE),
+COLUMN (REPORTDATE ,INDIVIDUALENTERPRISEID),
+COLUMN (MEMBERCOUNTY ,MEMBERSTATE),
+COLUMN (REPORTDATE ,MEMBERID ,MEDICAREID)
+ON enroll2;
+
+---Baseline Enrollment with Key indicators
+CREATE VOLATILE TABLE Enrollment AS (
+SELECT ENROLL.*,
+-- CASE WHEN ProKey.PROVID IS NOT NULL THEN 'Y' ELSE 'N' END AS P4QFlag,
+coalesce(SSA_MemberState_MemberCounty.SSA,'U') as SSA_MemberState_MemberCounty,
+coalesce(ENROLL.MMRStateCountyCode,'U') as SSA_MMRState_MMRCounty,
+coalesce(SSA_PCPState_PCPCounty.SSA,'U') as SSA_PCPState_PCPCounty,--,
+Orig.OriginalStartDate,
+COALESCE(SMK.SourceMemberKey, SMK2.SourceMemberKey) AS SourceMemberKey -- 2023-12-06 - Cody Piazza - adding logic to fill in missing SourceMemberKey values
+--agt.thevalue as Agent_ID
+
+FROM enroll2 as enroll
+
+LEFT JOIN BUSINESS
+_OPS_CORE_V.LU_SSA_STATE_COUNTY AS SSA_MemberState_MemberCounty --join to add SSA to Member State/ Member County --> nulls are invalid entries add to a table to look up later
+ON ENROLL.MemberState = SSA_MemberState_MemberCounty.StateAbr AND
+ENROLL.MemberCounty = SSA_MemberState_MemberCounty.CountyName
+
+LEFT JOIN BUSINESS_OPS_CORE_V.LU_SSA_STATE_COUNTY AS SSA_PCPState_PCPCounty --join to add SSA to PCP State/ PCP County --> nulls are invalid entries add to a table to look up later
+ON ENROLL.PCPState = SSA_PCPState_PCPCounty.StateAbr AND
+ENROLL.PCPCounty = SSA_PCPState_PCPCounty.CountyName
+
+LEFT JOIN Ref_OriginalStartDate as Orig
+ON ENROLL.MemberID = Orig.MemberID
+
+LEFT JOIN Ref_SourceMemberKey as SMK
+ON ENROLL.ReportDate = SMK.ReportDate AND
+ENROLL.MedicareID = SMK.MedicareID
+
+LEFT JOIN Ref_SourceMemberKey as SMK2
+ON ENROLL.ReportDate = SMK2.ReportDate AND
+ENROLL.MemberID = SMK2.MemberID
+
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON Enrollment;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (EVENTYEAR ,CONTRACT_PBP_SEGMENT,SSA_MEMBERSTATE_MEMBERCOUNTY),
+COLUMN (EVENTYEAR ,CONTRACT_PBP_SEGMENT)
+ON Enrollment;
+
+DROP TABLE Ref_OriginalStartDate;
+DROP TABLE Ref_SourceMemberKey;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 03: Add SSA codes and original start date.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from Enrollment
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll2) final;
+
+drop table enroll2;
+
+
+
+--ADD MARKET MAPPING DATA
+CREATE VOLATILE TABLE Enrollment_Mappings AS (
+select enroll.*,
+case when left(enroll.PBP,1) = '8' then 'Group MA' else coalesce(Mkt.Region,'Unknown') end as Region,
+case when left(enroll.PBP,1) = '8' then 'Group MA' else coalesce(Mkt.Market,'Unknown') end as Market,
+case when left(enroll.PBP,1) = '8' then 'Group MA' else coalesce(member_county.SubMarket, mmr_county.SubMarket, pcp_county.SubMarket, 'Out of Area') end as SubMarket,
+case when left(enroll.PBP,1) = '8' then 'Group MA' else coalesce(member_county.MicroMarket, mmr_county.MicroMarket, pcp_county.MicroMarket, 'Out of Area') end as MicroMarket,
+case when left(enroll.PBP,1) = '8' then 'Group MA' else coalesce(member_county.Report_State_County, mmr_county.Report_State_County, pcp_county.Report_State_County, 'Out of Area') end as Report_State_County,
+coalesce(member_county.SSA, mmr_county.SSA, pcp_county.SSA, 'OOA') as Report_SSA
+
+from Enrollment as enroll left join Ref_Region_Market_Ind_MA as Mkt
+ON enroll.EventYear = Mkt.PlanYear AND
+enroll.Contract_PBP_Segment = Mkt.Contract_PBP_Segment
+
+--check for member state / member county for mappings
+left join Ref_Submarket_Micromarket_Ind_MA as member_county
+ON enroll.EventYear = member_County.PlanYear AND
+enroll.Contract_PBP_Segment = member_county.Contract_PBP_Segment AND
+enroll.SSA_MemberState_MemberCounty = member_county.SSA
+
+--check for mmr state / mmr county for mappings
+left join Ref_Submarket_Micromarket_Ind_MA as mmr_county
+ON enroll.EventYear = mmr_county.PlanYear AND
+enroll.Contract_PBP_Segment = mmr_county.Contract_PBP_Segment AND
+enroll.SSA_MemberState_MemberCounty = mmr_county.SSA
+
+--check for pcp state / pcp county for mappings
+left join Ref_Submarket_Micromarket_Ind_MA as pcp_county
+ON enroll.EventYear = pcp_county.PlanYear AND
+enroll.Contract_PBP_Segment = pcp_county.Contract_PBP_Segment AND
+enroll.SSA_MemberState_MemberCounty = pcp_county.SSA
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON Enrollment_Mappings;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (EVENTYEAR ,CONTRACT_PBP_SEGMENT)
+ON Enrollment_Mappings;
+
+DROP TABLE Ref_Region_Market_Ind_MA;
+DROP TABLE Ref_Submarket_Micromarket_Ind_MA;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 04: Add Market Mapping Data.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from Enrollment_Mappings
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM Enrollment) final;
+
+drop table Enrollment;
+
+
+
+--Add plan data
+CREATE VOLATILE TABLE Enrollment_PlanData AS (
+select enroll.*,
+Case when left(enroll.PBP,1)='8' then 'Group MA' else CMS.PlanTypeReporting end as PlanTypeReporting,
+--10/09/2024 Fix code to correctly populate the flag
+--Case when PlanTypeReporting='Group MA' then 'Y' else 'N' end as Group_MA_Flag,
+Case when left(enroll.PBP,1)='8' then 'Y' when CMS.PlanTypeReporting='Group MA' then 'Y'
+else 'N' end as Group_MA_Flag,
+CMS.Monthly_Consolidated_Premium,
+CMS.PremiumBand
+
+from Enrollment_Mappings as enroll left join Ref_PlanType_And_Prem as CMS
+ON enroll.EventYear = CMS.PlanYear AND
+enroll.Contract_PBP_Segment = CMS.Contract_PBP_Segment
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS ;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (PCPID),
+COLUMN (REPORTDATE)
+ON Enrollment_PlanData;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON Enrollment_PlanData;
+
+DROP TABLE Ref_PlanType_And_Prem;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 05: Add premium and plan type data.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from Enrollment_PlanData
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM Enrollment_Mappings) final;
+
+
+drop table Enrollment_Mappings;
+
+
+--PICK UP FROM HERE
+--Add P4Q data
+CREATE MULTISET VOLATILE TABLE enroll_p4q AS (
+select enroll.*,
+CASE WHEN ProKey.PROVID IS NOT NULL THEN 'Y' ELSE 'N' END AS P4QFlag
+from Enrollment_PlanData as enroll LEFT JOIN Ref_P4Q AS ProKey
+ON ENROLL.PCPID = ProKey.PROVID AND
+Enroll.Reportdate BETWEEN ProKey.EFFDATE AND ProKey.TERMDATE
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON enroll_p4q;
+
+DROP TABLE Ref_P4Q;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 06: Add P4Q flag.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from enroll_p4q
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM Enrollment_PlanData) final;
+
+drop table Enrollment_PlanData;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (
+REPORTDATE ,
+REPORTBEGINDATE,
+REPORTENDDATE ,
+CONTINUOUSEFFECTIVEDATE ,
+DEATHDATE,
+INDIVIDUALENTERPRISEID ,
+MEMBERID ,
+MEDICAREID ,
+MEDICAIDID ,
+MEMBERLAST ,
+MEMBERFIRST ,
+MEMBERMIDDLE ,
+DATEOFBIRTH ,
+AGE ,
+GENDER,
+LANGUAGEDESC ,
+MEMBERCOUNTY ,
+MEMBERSTATE ,
+MEMBERZIP,
+MEMBERLATITUDE ,
+MEMBERLONGITUDE ,
+REGIONCODE ,
+HHVIDESC ,
+PCPNPI ,
+PCPTIN ,
+PCPID ,
+PCPNAME ,
+PCPCOUNTY ,
+PCPSTATE ,
+PROVIDERLATITUDE,
+PROVIDERLONGITUDE ,
+LOBCODE ,
+PRODUCTTYPE ,
+PLANTYPE ,
+SNPTYPE,
+PLANNAME ,
+MMRSTATECOUNTYCODE ,
+MMRCOUNTY ,
+MMRSTATE,
+ENGAGEMENTCODE ,
+ENGAGEMENT ,
+HCODE ,
+CONTRACTIDPBPSEGMENT ,
+PBP,
+SEGMENTID ,
+GROUPID ,
+EGWPINDICATOR ,
+BUSINESSNAME,
+OPERATIONALMARKET ,
+REGULATORYMARKET ,
+OPERATIONALSUBMARKET ,
+MANAGINGENTITY ,
+REPORTINGPOD ,
+PODCODE ,
+PODNAME ,
+CMSDUALSTATUSCODE ,
+CMSDUALSTATUSCODEDESC ,
+MEDIMEDIFLAG ,
+ESRDFLAG ,
+WORKINGAGEFLAG ,
+INSTFLAG ,
+HOSPICEFLAG ,
+LISFLAG ,
+HOSPICEMMRFLAG
+),
+COLUMN (REPORTBEGINDATE ,MEDICAREID),
+COLUMN (REPORTDATE ,MEDICAREID),
+COLUMN (REPORTDATE),
+COLUMN (REPORTBEGINDATE),
+COLUMN (REPORTDATE ,MEMBERID ,MEDICAREID)
+ON enroll_p4q;
+
+--changes
+CREATE VOLATILE TABLE enroll_growth_indicators AS (
+select curr.*,
+--case when future.MemberID is null then curr.reportenddate + interval '1' month else date '2099-12-31' end as DisenrollDate,
+--case when prior.Agtkey <>curr.Agtkey then curr.reportbegindate else null end as AgtChangeDate,
+--case when prior.GeoKey <>curr.GeoKey then curr.reportbegindate else null end as GeoChangeDate,
+--case when prior.Contract_PBP_Segment <>curr.Contract_PBP_Segment then curr.reportbegindate else date '2099-12-31' end as PlanChangeDate,
+-- case when prior.Contract_PBP_Segment is null then curr.reportbegindate else date '2099-12-31' end as NewSaleDate,
+case when curr.reportbegindate<= ((current_date-Extract(day from current_date) + 1)+ interval '2' month) --and future.MemberID is null
+and future.medicareid is null and maxdate.ReportBeginDate is null then 'DE' --add date logic to remove the mass rows
+when curr.reportbegindate>= ((current_date-Extract(day from current_date)+1) + interval '3' month) and trr.medicareid is not null and trr2.medicareid is null then 'DE'
+--when future.agtkey<>curr.agtkey then 'Agent Change'
+--when future.geokey<>curr.geokey then 'Mapping Change'
+when future.Contract_PBP_Segment <> curr.Contract_PBP_Segment then 'Plan Change'
+else 'No Change' end as ChangeComingIndicator,
+--case when prior.Agtkey <>curr.Agtkey then 1 else 0 end as AgtChangeFlag,
+--case when prior.GeoKey <>curr.GeoKey then 1 else 0 end as GeoChangeFlag,
+case when prior.Contract_PBP_Segment is null or (curr.reportbegindate='2020-01-01' and curr.reportbegindate=curr.continuouseffectivedate) then 1 else 0 end as NewSaleFlag,
+case when prior.Contract_PBP_Segment <>curr.Contract_PBP_Segment then 1 else 0 end as PlanChangeFlag
+
+from enroll_p4q as curr
+/*left join enroll_p4q as prior --prior to identify new sales, plan changes, and changes to mappings (geo & agent)
+ON curr.MemberID = prior.MemberID AND
+curr.ReportDate = (prior.ReportDate + interval '1' month)
+left join enroll_p4q as future --used to identify disenrollments
+ON curr.MemberID = future.MemberID AND
+curr.ReportDate = (future.ReportDate - interval '1' month)*/
+left join enroll_p4q as prior --prior to identify new sales, plan changes, and changes to mappings (geo & agent)
+ON curr.Medicareid = prior.Medicareid AND
+curr.ReportDate = (prior.ReportDate + interval '1' month)
+
+left join enroll_p4q as future --used to identify disenrollments
+ON curr.Medicareid = future.Medicareid AND
+curr.ReportDate = (future.ReportDate - interval '1' month)
+
+left join trrresults_updated trr on trr.medicareid=curr.medicareid and curr.reportbegindate=trr.effectivedate
+and trr.rectype='Disenrollment'--checking for de
+
+left join trrresults_updated trr2 on trr2.medicareid=curr.medicareid and curr.reportbegindate=trr2.effectivedate
+and trr2.rectype='Enrollment'--checking for enrollment
+left join ( select max(reportbegindate) as reportbegindate from OSS_PROVISIONING_V.sdoGBSAEnrollment) maxdate
+on maxdate.reportbegindate=curr.reportbegindate --adding to remove mass dates
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON enroll_growth_indicators;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (CHANGECOMINGINDICATOR)
+ON enroll_growth_indicators;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 07: Add flag to identify new sales, plan changes and DE coming in following month.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when dupCheck>1 then 1 else 0 end) as DupCount
+from enroll_growth_indicators
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_p4q) final;
+
+drop table enroll_p4q;
+
+
+--create a temp table for the DE data and update the ReportMonth fields to be the next month
+CREATE MULTISET VOLATILE TABLE DE_add_back AS (
+select *
+from enroll_growth_indicators
+where ChangeComingIndicator = 'DE'
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON DE_add_back;
+
+update DE_add_back
+set EventYear = extract(year from ReportDate + interval '1' month),
+ReportDate = ReportDate + interval '1' month,
+ReportBeginDate = ReportBeginDate + interval '1' month,
+ReportEndDate = ReportBeginDate + interval '2' month - interval '1' day,
+NewSaleFlag = 0,
+CustomerDuration = extract(year from ReportDate + interval '1' month) - EffectiveYear + 1, --MJH: 2022.07.22
+CustomerDurationBand = case when extract(year from ReportDate + interval '1' month) - EffectiveYear + 1 >=5 then '5+' else trim(cast(extract(year from ReportDate + interval '1' month) - EffectiveYear + 1 as varchar(1))) end ; --MJH: 2022.07.22 JJ removed the as statement
+
+
+
+--Add DE Data to the enrollment table
+CREATE VOLATILE TABLE enroll_growth_indicators_updated AS (
+SELECT
+ReportDate,
+ReportBeginDate,
+ReportEndDate,
+ContinuousEffectiveDate,
+DeathDate,
+IndividualEnterpriseID,
+MemberID,
+MedicareID,
+MedicaidID,
+MemberLast,
+MemberFirst,
+MemberMiddle,
+DateofBirth,
+Age,
+Gender,
+LanguageDesc,
+MemberCounty,
+MemberState,
+MemberZip,
+MemberLatitude,
+MemberLongitude,
+RegionCode,
+HHVIDesc,
+PCPNPI,
+PCPTIN,
+PCPID,
+PCPName,
+PCPCounty,
+PCPState,
+ProviderLatitude,
+ProviderLongitude,
+LOBCode,
+ProductType,
+PlanType,
+SNPType,
+PlanName,
+MMRStateCountyCode,
+MMRCounty,
+MMRState,
+EngagementCode,
+Engagement,
+HCODE,
+ContractIDPBPSegment,
+PBP,
+SegmentID,
+GroupID,
+EGWPIndicator,
+BusinessName,
+OperationalMarket,
+RegulatoryMarket,
+OperationalSubMarket,
+ManagingEntity,
+ReportingPod,
+PodCode,
+PodName,
+CMSDualStatusCode,
+CMSDualStatusCodeDesc,
+MediMediFlag,
+ESRDFlag,
+WorkingAgeFlag,
+InstFlag,
+HospiceFlag,
+LISFlag,
+HospiceMMRFlag,
+ESRDMMRFlag,
+RiskScore,
+SourceDataKey ,
+SnapShotDate ,
+AttributedPCPIndicator,
+EMPLR_GRP_ID,
+EMPLR_GRP_ACCT_NUM,
+EMPLR_GRP_NM,
+EMPLR_GRP_BEN_OPT_ID,
+EMPLR_GRP_BEN_OPT_NM,
+EMPLR_GRP_BRNCH_ID,
+EMPLR_GRP_BRNCH_NM,
+EMPLR_GRP_EFF_DT,
+EMPLR_GRP_TERM_DT,
+PRODT_SUB_TY,
+EventYear,
+EffectiveYear,
+CustomerDuration,
+CustomerDurationBand,
+ContractPBP,
+Contract_PBP_Segment,
+DupCheck,
+SSA_MemberState_MemberCounty,
+SSA_MMRState_MMRCounty,
+SSA_PCPState_PCPCounty,
+OriginalStartDate,
+SourceMemberKey,
+Region,
+Market,
+SubMarket,
+MicroMarket,
+Report_State_County,
+Report_SSA,
+PlanTypeReporting,
+Group_MA_Flag,
+Monthly_Consolidated_Premium,
+PremiumBand,
+P4QFlag,
+ChangeComingIndicator,
+NewSaleFlag,
+PlanChangeFlag,
+0 AS DisenrollmentFlag,
+1 - NewSaleFlag AS BeginningMembershipFlag,
+1 EndingMembershipFlag
+FROM enroll_growth_indicators
+UNION ALL
+SELECT
+ReportDate,
+ReportBeginDate,
+ReportEndDate,
+ContinuousEffectiveDate,
+DeathDate,
+IndividualEnterpriseID,
+MemberID,
+MedicareID,
+MedicaidID,
+MemberLast,
+MemberFirst,
+MemberMiddle,
+DateofBirth,
+Age,
+Gender,
+LanguageDesc,
+MemberCounty,
+MemberState,
+MemberZip,
+MemberLatitude,
+MemberLongitude,
+RegionCode,
+HHVIDesc,
+PCPNPI,
+PCPTIN,
+PCPID,
+PCPName,
+PCPCounty,
+PCPState,
+ProviderLatitude,
+ProviderLongitude,
+LOBCode,
+ProductType,
+PlanType,
+SNPType,
+PlanName,
+MMRStateCountyCode,
+MMRCounty,
+MMRState,
+EngagementCode,
+Engagement,
+HCODE,
+ContractIDPBPSegment,
+PBP,
+SegmentID,
+GroupID,
+EGWPIndicator,
+BusinessName,
+OperationalMarket,
+RegulatoryMarket,
+OperationalSubMarket,
+ManagingEntity,
+ReportingPod,
+PodCode,
+PodName,
+CMSDualStatusCode,
+CMSDualStatusCodeDesc,
+MediMediFlag,
+ESRDFlag,
+WorkingAgeFlag,
+InstFlag,
+HospiceFlag,
+LISFlag,
+HospiceMMRFlag,
+ESRDMMRFlag,
+RiskScore,
+SourceDataKey ,
+SnapShotDate ,
+AttributedPCPIndicator,
+EMPLR_GRP_ID,
+EMPLR_GRP_ACCT_NUM,
+EMPLR_GRP_NM,
+EMPLR_GRP_BEN_OPT_ID,
+EMPLR_GRP_BEN_OPT_NM,
+EMPLR_GRP_BRNCH_ID,
+EMPLR_GRP_BRNCH_NM,
+EMPLR_GRP_EFF_DT,
+EMPLR_GRP_TERM_DT,
+PRODT_SUB_TY,
+EventYear,
+EffectiveYear,
+CustomerDuration,
+CustomerDurationBand,
+ContractPBP,
+Contract_PBP_Segment,
+DupCheck,
+SSA_MemberState_MemberCounty,
+SSA_MMRState_MMRCounty,
+SSA_PCPState_PCPCounty,
+OriginalStartDate,
+SourceMemberKey,
+Region,
+Market,
+SubMarket,
+MicroMarket,
+Report_State_County,
+Report_SSA,
+PlanTypeReporting,
+Group_MA_Flag,
+Monthly_Consolidated_Premium,
+PremiumBand,
+P4QFlag,
+ChangeComingIndicator,
+NewSaleFlag,
+0 AS PlanChangeFlag,
+1 as DisenrollmentFlag,
+1 as BeginningMembershipFlag,
+0 EndingMembershipFlag
+FROM DE_add_back
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON enroll_growth_indicators_updated;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (REPORT_SSA),
+COLUMN (EVENTYEAR ,REPORT_SSA),
+COLUMN (HCODE ,PBP ,REPORT_SSA),
+COLUMN ((EXTRACT(YEAR FROM (ReportBeginDate)))- 1) AS ST_280413110910_0_enroll_growth_indicators_updated,
+COLUMN (DISENROLLMENTFLAG)
+ON enroll_growth_indicators_updated;
+
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 08: Add DE records to the following month. "Dup Count" field shows disenrollment counts added. Difference should match this total, and this will be the new total moving forward.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(DisenrollmentFlag) as DupCount
+from enroll_growth_indicators_updated
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_growth_indicators) final;
+
+drop table enroll_growth_indicators;
+drop table DE_add_back;
+
+
+/*select *
+from enroll_growth_indicators
+--_updated
+where MedicareID='5MW4C94MY95';
+select *
+from de_add_back
+where MedicareID='1TG1MW4WX01';
+select *
+from OSS_PROVISIONING_V.sdoGBSAEnrollment
+where medicareid='5MW4C94MY95';
+*/
+
+--Add expansion year indicators
+CREATE MULTISET VOLATILE TABLE enroll_expansion AS (
+select enroll.*,
+case when enroll.PlanTypeReporting = 'Group MA' then 'Group MA' else exp_yr.ExpansionYear end as ExpansionYear,
+case when enroll.PlanTypeReporting = 'MA Only - HMO' then exp_type.MA_Only_HMO_Expansion_Type
+when enroll.PlanTypeReporting = 'MA Only - PPO' then exp_type.MA_Only_PPO_Expansion_Type
+when enroll.PlanTypeReporting = 'PPO' then exp_type.PPO_Expansion_Type
+when enroll.PlanTypeReporting = 'HMO' then exp_type.HMO_Expansion_Type
+when enroll.PlanTypeReporting = 'PFFS' then exp_type.PFFS_Expansion_Type
+when enroll.PlanTypeReporting = 'Cost' then exp_type.Cost_Expansion_Type
+when enroll.PlanTypeReporting = 'MSA' then exp_type.MSA_Expansion_Type
+when enroll.PlanTypeReporting = 'I-SNP' then exp_type.ISNP_Expansion_Type
+when enroll.PlanTypeReporting = 'D-SNP' then exp_type.DSNP_Expansion_Type
+when enroll.PlanTypeReporting = 'C-SNP' then exp_type.CSNP_Expansion_Type
+else 'Unknown' end ExpansionType,
+CASE when SAR.NextYearPBPCountySARInd = 1 then 1 else 0 END as SARIndicator
+
+from enroll_growth_indicators_updated as enroll left join Ref_ExpansionYear as exp_yr
+on enroll.Report_SSA = exp_yr.SSA
+
+left join (select * from REPORTING_V.REF_IND_MA_COUNTY_PRODUCT_EXPANSION_LOOKUP where ParentOrganization = 'Cigna')as exp_type
+on enroll.EventYear = exp_type.RecordYear AND
+enroll.Report_SSA = exp_type.SSA
+left join BUSINESS_OPS_CORE_V.MA_CIGNA_PLAN_MATURITY_SAR SAR on SAR.ContractID=enroll.hcode
+and enroll.pbp=SAR.PlanID
+and extract(year from enroll.reportbegindate)- 1=SAR.RecordYear
+--and enroll.membercounty=SAR.County --removing per Matt
+and enroll.Report_SSA=SAR.SSACode --adding this to help with county discrepancies
+and enroll.disenrollmentflag=1 -------adding SAR
+
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON enroll_expansion;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (REPORTBEGINDATE ,MEDICAREID),
+COLUMN (SOURCEMEMBERKEY),
+COLUMN (REPORTBEGINDATE ,HCODE ,PBP,SOURCEMEMBERKEY),
+COLUMN (NEWSALEFLAG),
+COLUMN (REPORTBEGINDATE),
+COLUMN (REPORTBEGINDATE ,MEDICAREID ,HCODE),
+COLUMN (REPORTBEGINDATE ,MEMBERID),
+COLUMN (DISENROLLMENTFLAG),
+COLUMN (NEWSALEFLAG ,DISENROLLMENTFLAG)
+ON enroll_expansion;
+COLLECT STATS
+COLUMN (ETL_IS_CURR_IND ,SRC_MBR_KEY)
+ON DATAMART_MEMBER_T.MBR_SALES_AGT_DIM;
+COLLECT STATS
+COLUMN (SRC_MBR_KEY ,ENRLMT_START_DT)
+ON DATAMART_MEMBER_T.MBR_ENRLMT_CVRG_BASE;
+
+DROP TABLE Ref_ExpansionYear;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 09: Add expansion year indicators.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, 0 as DupCount
+from enroll_expansion
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_growth_indicators_updated) final;
+
+
+drop table enroll_growth_indicators_updated;
+
+CREATE VOLATILE TABLE enroll_expansion_datamart_prelim as (
+select
+enroll.ReportbeginDate,
+enroll.IndividualEnterpriseID,
+enroll.MedicareID,
+enroll.SourceMemberKey,
+enroll.NEWSALEFLAG,
+enroll.HCode||'_'||enroll.PBP as mbr_enrlmt_join_key,
+month(ReportbeginDate) as report_begin_month
+from enroll_expansion enroll
+) with data NO PRIMARY INDEX ON COMMIT PRESERVE ROWS;
+
+CREATE VOLATILE TABLE VT_MBR_SALES_AGT_DIM AS (
+SELECT
+TRIM(Sales_Agt_ID) AS Sales_Agt_ID,
+ETL_IS_CURR_IND,
+ETL_IS_DEL_IND,
+SRC_EFF_DT,
+SRC_TERM_DT,
+SRC_MBR_KEY
+FROM DATAMART_MEMBER_V.MBR_SALES_AGT_DIM
+WHERE ETL_IS_CURR_IND='Y'
+AND SRC_EFF_DT <= (SELECT MAX(ReportbeginDate) FROM enroll_expansion_datamart_prelim)
+AND SRC_TERM_DT >= (SELECT MIN(ReportbeginDate) FROM enroll_expansion_datamart_prelim)
+)WITH DATA PRIMARY INDEX (SRC_EFF_DT, SRC_TERM_DT, SRC_MBR_KEY) ON COMMIT PRESERVE ROWS;
+
+CREATE VOLATILE TABLE VT_MBR_ENRLMT_CVRG_BASE AS (
+select
+etl_load_dt_tm,
+HLTHPLN_IK,
+--11/27/2024 Include formatted sign date
+ENRLMT_SIG_DT,
+ENRLMT_SIG_DT_KEY,
+SRC_MBR_KEY,
+enrlmt_start_dt,
+LEFT(HLTHPLN_IK,9) as mbr_enrlmt_join_key,
+month(enrlmt_start_dt) as enrlmt_start_dt_month
+FROM DATAMART_MEMBER_V.MBR_ENRLMT_CVRG_BASE
+where --ETL_IS_DEL_IND='N' AND
+enrlmt_start_dt >= (SELECT MIN(ReportbeginDate) FROM enroll_expansion_datamart_prelim)
+AND enrlmt_start_dt <= (SELECT MAX(ReportbeginDate) FROM enroll_expansion_datamart_prelim)
+)WITH DATA PRIMARY INDEX (ENRLMT_SIG_DT_KEY, SRC_MBR_KEY, enrlmt_start_dt, mbr_enrlmt_join_key, enrlmt_start_dt_month) ON COMMIT PRESERVE ROWS;
+
+--AGENT CODE TEST (MJH: 2022.07.22 --> where I left off)
+CREATE MULTISET VOLATILE TABLE Datamartdata AS (
+select enroll.ReportbeginDate as ReportDate,
+enroll.IndividualEnterpriseID,
+enroll.MedicareID,
+enroll.SourceMemberKey,
+agt.Sales_Agt_ID,
+agt.ETL_IS_CURR_IND,
+agt.ETL_IS_DEL_IND,
+agt.SRC_EFF_DT,
+agt.SRC_TERM_DT,
+v.etl_load_dt_tm as QNXTLoadDt,
+v.HLTHPLN_IK,
+--MJH Edit (2022.11.10): adding signagture date and row_num to get the first date for the enrollment
+v.ENRLMT_SIG_DT_KEY as SignatureDate,--MJH Edit (2022.11.10)
+--11/27/2024 Include formatted signature Date
+v.ENRLMT_SIG_DT
+from enroll_expansion_datamart_prelim as enroll
+left join VT_MBR_SALES_AGT_DIM as agt
+ON enroll.SourceMemberKey = agt.SRC_MBR_KEY AND
+--enroll.ReportBeginDate between agt.ETL_RCD_START_DT and agt.ETL_RCD_END_DT
+enroll.ReportBeginDate between agt.SRC_EFF_DT and agt.SRC_TERM_DT
+and agt.ETL_IS_CURR_IND = 'Y'
+left join VT_MBR_ENRLMT_CVRG_BASE v
+on v.SRC_MBR_KEY = enroll.SourceMemberKey and
+--v.ETL_IS_DEL_IND='N' and
+enroll.reportbegindate=v.enrlmt_start_dt and
+--enroll.HCode||'_'||enroll.PBP = LEFT(v.HLTHPLN_IK,9) and --13 wiwth segment 9 without segment
+enroll.mbr_enrlmt_join_key = v.mbr_enrlmt_join_key and
+enroll.NEWSALEFLAG=1
+--||'_'||trim(EXTRACT(YEAR FROM CI.NEWSALEMONTH))||trim(extract(month from ci.newsalemonth) (format '99'))||trim(extract(day from ci.newsalemonth) (format '99'))
+
+--and v.ETL_IS_CURR_IND='Y'
+QUALIFY row_number() over (partition by ReportbeginDate, MedicareID, v.mbr_enrlmt_join_key order by v.etl_load_dt_tm) = 1
+)WITH DATA PRIMARY INDEX(IndividualEnterpriseID, MedicareID, Sales_Agt_ID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+DROP TABLE enroll_expansion_datamart_prelim;
+DROP TABLE VT_MBR_SALES_AGT_DIM;
+DROP TABLE VT_MBR_ENRLMT_CVRG_BASE;
+
+--COLLECT STATS COLUMN (IndividualEnterpriseID, MedicareID, Sales_Agt_ID, ReportDate) ON Datamartdata;
+
+COLLECT STATS
+COLUMN (REPORTDATE ,MEDICAREID)
+ON Datamartdata;
+
+
+
+
+
+
+/*
+--TESTING
+select *
+from Datamartdata
+where MedicareID = '7KV2VJ0KK13'
+order by 1 desc
+select distinct IndividualEnterpriseID
+from
+(select reportdate, IndividualEnterpriseID, count(1) as recordCount
+from Datamartdata
+group by reportdate, IndividualEnterpriseID
+where reportDate = date '2022-06-15'
+having count(1)>1) A
+select *
+from enroll_expansion
+where reportDate = date '2022-06-15' AND
+IndividualEnterpriseID='35600038'
+select *
+from Datamartdata
+where reportDate = date '2022-06-15' AND
+IndividualEnterpriseID='35600038'*/
+
+
+--MJH: 2022.07.22 --> commenting this code out and redoing based on the SourceMemberKey
+/*CREATE MULTISET VOLATILE TABLE Datamartdata AS (
+select
+distinct ci.medicareid,
+CI.ReportBeginDate,
+lu.medcr_id,
+v.etl_load_dt_tm as QNXTLoadDt,
+v.hlthpln_ik,
+v.enrlmt_start_dt,
+id_ty,
+v.ETL_IS_CURR_IND,
+v.ETL_IS_DEL_IND,
+sa.SALES_AGT_ID,
+ROW_NUMBER() OVER (PARTITION BY CI.MedicareID, CI.ReportBeginDate ORDER BY sa.src_eff_dt DESC) as rono
+FROM enroll_expansion CI
+left join DATAMART_MEMBER_V.MBR_MEDCR_DIM lu
+on ci.MedicareID=lu.medcr_id and
+ci.reportbegindate between lu.rcd_start_dt and lu.rcd_end_dt
+left join DATAMART_MEMBER_V.MBR_SALES_AGT_DIM sa
+on sa.SRC_MBR_KEY=lu.SRC_MBR_KEY and
+CI.ReportBeginDate between sa.ETL_RCD_START_DT and sa.ETL_RCD_END_DT
+left join DATAMART_MEMBER_V.MBR_ENRLMT_CVRG_BASE v
+on v.SRC_MBR_KEY = lu.SRC_MBR_KEY and
+v.ETL_IS_DEL_IND='N' and
+ci.reportbegindate=v.enrlmt_start_dt and
+ci.HCode||'_'||ci.PBP = LEFT(v.HLTHPLN_IK,9) and --13 wiwth segment 9 without segment
+ci.NEWSALEFLAG=1
+--||'_'||trim(EXTRACT(YEAR FROM CI.NEWSALEMONTH))||trim(extract(month from ci.newsalemonth) (format '99'))||trim(extract(day from ci.newsalemonth) (format '99'))
+--and v.ETL_IS_CURR_IND='Y'
+where ci.reportbegindate>='2017-01-01'
+)WITH DATA PRIMARY INDEX(MedicareID, ReportBeginDate) ON COMMIT PRESERVE ROWS; */
+
+
+--Add TRR data (Jocelyn) -----REVISIT TO MAKE SURE WE HAVE THE RIGHT EVENT DATE LOGIC -->Update the reference table in the top section to correct
+CREATE MULTISET VOLATILE TABLE enroll_trr AS (
+select enroll.*,
+coalesce(TRR.Prior_HCode_PBP,'') as TRR_Prior_HCode_PBP,
+coalesce(TRR.Prior_HCode,'') as TRR_Prior_HCode,
+coalesce(TRR.Prior_PBP,'') as TRR_Prior_PBP,
+coalesce(TRR.ParentOrganization,'') as TRR_Prior_ParentOrganization ,
+coalesce(TRR.PlanTypeReporting,'') as TRR_Prior_PlanTypeReporting,
+coalesce(TRR.transactionReplyCode,'') as TRR_TransactionReplyCode,
+coalesce(TRR.TRCShortName,'') as TRR_TRCShortName,
+coalesce(TRR.electiontype,'') as TRR_ElectionType,
+--MJH Edit (2022.11.10): Updating event date logic--coalesce(TRR.TransactionDate, dd.qnxtloaddt, td.transactiondate, enroll.ReportBeginDate) as EventDate,
+case when (enroll.newsaleflag = 1 or enroll.disenrollmentflag = 1) and TRR.TransactionDate is null and dd.qnxtloaddt is null and td.transactiondate is null then cast(enroll.ReportBeginDate as date)
+when enroll.newsaleflag = 1 and coalesce(cast(qnxtloaddt as date),date '2099-12-31')<coalesce(cast(TRR.TransactionDate as date),date '2099-12-31') then cast(qnxtloaddt as date)
+when enroll.newsaleflag = 1 then cast(TRR.TransactionDate as date)
+when enroll.disenrollmentflag = 1 and coalesce(cast(td.transactiondate as date),date '2099-12-31')<coalesce(cast(TRR.TransactionDate as date),date '2099-12-31') then cast(td.transactiondate as date)
+when enroll.disenrollmentflag=1 then cast(TRR.TransactionDate as date)
+else enroll.ReportBeginDate end as EventDate,
+TRR.TransactionDate as TRR_Transaction_Date,--MJH Edit (2022.11.10)
+dd.qnxtloaddt as Enrollment_Transaction_Date,--MJH Edit (2022.11.10)
+td.transactiondate as TRR_Transaction_Date2,--MJH Edit (2022.11.10)
+dd.SignatureDate,--MJH Edit (2022.11.10)
+--11/27/2024 Include formatted signature Date
+dd.ENRLMT_SIG_DT,
+coalesce(TRR.RecType,'') as TRR_RecType,
+DECode,
+DEType,
+DEDesc,
+DECategory,
+CompetitorContract,
+CompetitorName,
+CompetitorPlanType
+from enroll_expansion as enroll
+left join TRRResults_Updated as TRR
+ON enroll.MedicareID = TRR.MedicareID AND
+enroll.ReportBeginDate = TRR.EffectiveDate AND
+enroll.HCODE = TRR.ContractID AND
+(
+(disenrollmentflag=1 and rectype='Disenrollment') OR
+(newsaleflag=1 and rectype='Enrollment')
+)
+
+left join datamartdata dd
+on dd.medicareid=enroll.medicareid and ---THIS JOIN ADDS IN ENROLLMENT COVERAGE EFFECTIVED DATE
+dd.reportdate=enroll.reportbegindate and
+LEFT(dd.HLTHPLN_IK,5)=enroll.HCODE --and rono=1---adding rono to dedupe until OSS gets their stuff toether
+left join trrde td on td.memberid=enroll.memberid and td.reportbegindate=enroll.reportbegindate and disenrollmentflag=1
+
+
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, ReportDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, ReportDate) ON enroll_trr;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (NEWSALEFLAG),
+COLUMN (REPORTBEGINDATE ,MEDICAREID),
+COLUMN (REPORTDATE ,MEMBERID),
+COLUMN (MEDICAREID),
+COLUMN (REPORTDATE ,MEMBERID ,MEDICAREID),
+COLUMN (REPORTBEGINDATE)
+ON enroll_trr;
+
+DROP TABLE trrDE;
+
+/***********************************************Adding new competitor logic********************************************************/
+CREATE VOLATILE TABLE MRDE AS (
+SELECT
+m.MRDE_ID
+,m.EnrollEffDate AS MRDE_EffectiveDate
+--,add months
+,m.HIC
+,d.MRDE_InfoX_Detail_ID
+,d.BatchName
+,d.CreateDate
+,d.RecordType
+,d.mbdLoadDate
+,d.HIC_Claim_Num
+,d.LastName
+,d.FirstName
+,d.MiddleInit
+,d.Gender
+,d.BirthDate
+,d.PartA_EntitleDate
+,d.PartA_EntitleEndDate
+,d.PartB_EntitleDate
+,d.PartB_EntitleEndDate
+,d.PartDEligDate
+,d.State_Code
+,d.County_Code
+,d.HospiceStatus
+,d.HospiceStartDate
+,d.HospiceEndDate
+,d.Inst_Status
+,d.Inst_StartDate
+,d.Inst_EndDate
+,d.ESRD_Status
+,d.ESRD_StartDate
+,d.ESRD_EndDate
+,d.Medicaid_Status
+,d.Medicaid_StartDate
+,d.Medicaid_EndDate
+,d.EGHP_Indicator
+,d.Living_Status
+,d.DeathDate
+,d.InquiryResponse
+,d.uncoveredMonths
+,d.uncoveredMonths_EffDate
+,d.updateStatus
+,e.Plan_ID as WIPRO_PlanID
+,e.Plan_EnrollDate as WIPROEnrollDate
+,e.Plan_DisEnrollDate as WIPRODisEnrollDate
+,m.Inserted_DT
+
+FROM SALES_Commissi
+on_CORE_V.MRDE_TBLMRDE_RW m
+INNER JOIN SALES_Commission_CORE_V.MRDE_TBLMRDE_INFOX_Enrollment e
+ON m.MRDE_ID = e.MRDE_ID
+INNER JOIN SALES_Commission_CORE_V.MRDE_TBLMRDE_INFOX_Detail d
+ON m.MRDE_ID = d.MRDE_ID
+
+)WITH DATA PRIMARY INDEX(MRDE_ID,MRDE_InfoX_Detail_ID,WIPROEnrollDate) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MRDE_ID,MRDE_InfoX_Detail_ID,WIPROEnrollDate) ON MRDE;
+
+--FInal Comp From lookup
+CREATE VOLATILE TABLE MRDE_FINAL AS (
+select
+final.MRDE_EffectiveDate,
+final.HIC,
+CMS.ContractID,
+case when CMS.ParentOrganization = 'Cigna' then ''
+when CMS.ParentOrganization is not null then CMS.ParentOrganization
+else '' end ParentOrganization
+from
+(select A.*,
+row_number() over (partition by MRDE_EffectiveDate, HIC order by MRDE_EffectiveDate, HIC, WIPROEnrollDate desc, coalesce(createdate,date '1900-01-01') desc, wipro_planid) as ROWNO
+from MRDE As A) as final
+
+left join REPORTING_V.LU_CMS_PARENT_ORGANIZATION as CMS
+
+on final.wipro_planid = CMS.ContractID
+where ROWNO = 1
+)WITH DATA PRIMARY INDEX(MRDE_EffectiveDate,HIC) ON COMMIT PRESERVE ROWS;
+
+--COLLECT STATS COLUMN (MRDE_EffectiveDate,HIC) ON MRDE_FINAL;
+
+DROP TABLE MRDE;
+
+UPDATE enroll_trr
+FROM MRDE_FINAL AS b
+SET competitorcontract = B.ContractID,
+Competitorname=coalesce(B.ParentOrganization,'')
+WHERE MedicareID = B.HIC AND
+ReportBeginDate = B.MRDE_EffectiveDate
+and newsaleflag=1;
+/****************************************END Competitor ***********************************************************/
+
+DROP TABLE MRDE_FINAL;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 10: Add Event Date to the dataset from TRR.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, 0 as DupCount
+from enroll_trr
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_expansion) final;
+
+drop table enroll_expansion;
+drop table TRRResults_Updated;
+
+---look into causing dups
+
+/*CREATE MULTISET VOLATILE TABLE LEONAGENTS AS (---adding in static LEON agents
+select reportmonthbegin, medicareid, AgentID
+from HSLABGROWTHRPT.GR_MEMBER
+where marketdesc='South Florida'
+)WITH DATA PRIMARY INDEX(reportmonthbegin, MedicareID, AgentID) ON COMMIT PRESERVE ROWS ;*/ ----replaced with static table
+
+--Add Agent ID ---DUPLICATE MAPPING RECORDS NEEDS TO BE RESOLVED --> need to determine a way to back duplicates out
+CREATE MULTISET VOLATILE TABLE enroll_agentID AS (
+select enroll.*,
+--coalesce(agt.TheValue,'U') as agent_id,
+CASE WHEN coalesce(sales_agt_id, agt.TheValue, la.agentid) = 'U' THEN NULL ELSE coalesce(sales_agt_id, agt.TheValue, la.agentid) END as agent_id,
+agt.effDate,
+agt.TermDate,
+row_number() over (PARTITION by ENROLL.ReportDate, ENROLL.MemberID ORDER by case when agt.TheValue is null then 'zzzzzzzz' else agt.TheValue end) as Agent_Dup_Check
+
+from enroll_trr as enroll
+left join datamartdata dd
+on dd.medicareid=enroll.medicareid
+and dd.reportdate=enroll.reportbegindate
+left join AgentReference as agt
+on enroll.medicareid = agt.carriermemid and
+enroll.ReportBeginDate between agt.effDate and agt.termDate
+left join BUSINESS_OPS_CORE_V.LEONAGENTS la
+on la.medicareid=enroll.medicareid
+and la.reportmonthbegin=enroll.reportbegindate
+
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportDate) ON COMMIT PRESERVE ROWS ;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, Agent_ID, ReportDate) ON enroll_agentID;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (MEMBERID ,MEDICAREID ,AGENT_ID,EFFDATE ,TERMDATE),
+COLUMN (REPORTDATE ,MEMBERID ,MEDICAREID,AGENT_ID),
+COLUMN (REPORTDATE ,MEMBERID),
+COLUMN (REPORTDATE),
+COLUMN (AGENT_DUP_CHECK)
+ON enroll_agentID;
+
+DROP TABLE Datamartdata;
+DROP TABLE AgentReference;
+
+--Write duplicates to a separate table to flag for Data Governance
+DELETE FROM REPORTING_T.GR_QNXT_MEMBER_ATTRIBUTES_AGENT_ID_DUPS ALL;
+INSERT INTO REPORTING_T.GR_QNXT_MEMBER_ATTRIBUTES_AGENT_ID_DUPS
+select distinct
+B.MemberId,
+B.MedicareID,
+B.EffDate,
+B.TermDate,
+B.Agent_ID
+
+from enroll_agentID B inner join
+(select distinct enroll.ReportDate,enroll.MemberId
+from enroll_agentID as enroll
+where Agent_Dup_check >1) A
+on a.reportDate = B.Reportdate and
+a.memberid = B.memberid
+;
+
+--COLLECT STATS COLUMN (MemberId, MedicareID, Agent_ID, EffDate) ON REPORTING_T.GR_QNXT_MEMBER_ATTRIBUTES_AGENT_ID_DUPS;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 11: Add agent ID.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when Agent_Dup_check>1 then 1 else 0 end) as DupCount
+from enroll_agentID
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_trr) final;
+
+drop table enroll_trr;
+
+--Remove duplicates from the GR_MEMBER table due to duplicate agent IDs; write duplicates to a table
+DELETE FROM REPORTING_T.GR_MEMBER_AGENT_ID_DUP_RECORDS_REMOVED ALL;
+INSERT INTO REPORTING_T.GR_MEMBER_AGENT_ID_DUP_RECORDS_REMOVED
+-- 2024-11-27 - changed select * to a list of column names.
+select
+ReportDate,
+ReportBeginDate,
+ReportEndDate,
+ContinuousEffectiveDate,
+DeathDate,
+IndividualEnterpriseID,
+MemberID,
+MedicareID,
+MedicaidID,
+MemberLast,
+MemberFirst,
+MemberMiddle,
+DateofBirth,
+Age,
+Gender,
+LanguageDesc ,
+MemberCounty ,
+MemberState ,
+MemberZip ,
+MemberLatitude ,
+MemberLongitude ,
+RegionCode ,
+HHVIDesc ,
+PCPNPI ,
+PCPTIN ,
+PCPID ,
+PCPName ,
+PCPCounty ,
+PCPState ,
+ProviderLatitude ,
+ProviderLongitude ,
+LOBCode ,
+ProductType ,
+PlanType ,
+SNPType ,
+PlanName ,
+MMRStateCountyCode ,
+MMRCounty ,
+MMRState ,
+EngagementCode ,
+Engagement ,
+HCODE ,
+ContractIDPBPSegment ,
+PBP ,
+SegmentID ,
+GroupID ,
+EGWPIndicator ,
+BusinessName ,
+OperationalMarket ,
+RegulatoryMarket ,
+OperationalSubMarket ,
+ManagingEntity ,
+ReportingPod ,
+PodCode ,
+PodName ,
+CMSDualStatusCode ,
+CMSDualStatusCodeDesc ,
+MediMediFlag ,
+ESRDFlag ,
+WorkingAgeFlag ,
+InstFlag ,
+HospiceFlag ,
+LISFlag ,
+HospiceMMRFlag ,
+ESRDMMRFlag ,
+RiskScore ,
+SourceDataKey ,
+SnapShotDate ,
+AttributedPCPIndicator ,
+EMPLR_GRP_ID ,
+EMPLR_GRP_ACCT_NUM ,
+EMPLR_GRP_NM ,
+EMPLR_GRP_BEN_OPT_ID ,
+EMPLR_GRP_BEN_OPT_NM ,
+EMPLR_GRP_BRNCH_ID ,
+EMPLR_GRP_BRNCH_NM ,
+EMPLR_GRP_EFF_DT ,
+EMPLR_GRP_TERM_DT ,
+PRODT_SUB_TY ,
+EventYear ,
+EffectiveYear ,
+CustomerDuration ,
+CustomerDurationBand ,
+ContractPBP ,
+Contract_PBP_Segment ,
+DupCheck ,
+SSA_MemberState_MemberCounty ,
+SSA_MMRState_MMRCounty ,
+SSA_PCPState_PCPCounty ,
+OriginalStartDate ,
+SourceMemberKey ,
+Region ,
+Market ,
+SubMarket ,
+MicroMarket ,
+Report_State_County ,
+Report_SSA ,
+PlanTypeReporting ,
+Group_MA_Flag ,
+Monthly_Consolidated_Premium ,
+PremiumBand ,
+P4QFlag ,
+ChangeComingIndicator ,
+NewSaleFlag ,
+PlanChangeFlag ,
+DisenrollmentFlag ,
+BeginningMembershipFlag ,
+EndingMembershipFlag ,
+ExpansionYear ,
+ExpansionType ,
+SARIndicator ,
+TRR_Prior_HCode_PBP ,
+TRR_Prior_HCode ,
+TRR_Prior_PBP ,
+TRR_Prior_ParentOrganization ,
+TRR_Prior_PlanTypeReporting ,
+TRR_TransactionReplyCode ,
+TRR_TRCShortName ,
+TRR_ElectionType ,
+EventDate ,
+TRR_Transaction_Date ,
+Enrollment_Transaction_Date ,
+TRR_Transaction_Date2 ,
+SignatureDate ,
+TRR_RecType ,
+DECode ,
+DEType ,
+DEDesc ,
+DECategory ,
+CompetitorContract ,
+CompetitorName ,
+CompetitorPlanType ,
+agent_id,
+EFFDATE,
+TERMDATE,
+Agent_Dup_Check
+from enroll_agentID
+where Agent_Dup_check >1
+;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, Agent_ID, ReportDate) ON REPORTING_T.GR_MEMBER_AGENT_ID_DUP_RECORDS_REMOVED;
+
+--de dup records
+CREATE MULTISET VOLATILE TABLE enroll_agentID_deDupped AS (
+select B.*
+from enroll_agentID B
+where Agent_Dup_check = 1
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+----------------------------------------------------------------------------------------
+-- 2023-12-06 - Cody Piazza - DE Agent ID Fix - START
+----------------------------------------------------------------------------------------
+
+CREATE SET VOLATILE TABLE VT_REF_DE_AGENT_UPDATE AS (
+SELECT
+A.REPORTBEGINDATE,
+A.MEDICAREID,
+B.AGENT_ID
+FROM enroll_agentID_deDupped A
+JOIN enroll_agentID_deDupped B
+ON A.MEDICAREID = B.MEDICAREID
+AND B.REPORTBEGINDATE = A.REPORTBEGINDATE - INTERVAL '1' MONTH
+AND A.DISENROLLMENTFLAG = 1
+AND A.AGENT_ID IS NULL
+AND B.AGENT_ID IS NOT NULL
+)WITH DATA PRIMARY INDEX(REPORTBEGINDATE,MEDICAREID) ON COMMIT PRESERVE ROWS;
+
+UPDATE A
+FROM enroll_agentID_deDupped A, VT_REF_DE_AGENT_UPDATE B
+SET AGENT_ID = B.AGENT_ID
+WHERE
+A.REPORTBEGINDATE = B.REPORTBEGINDATE
+AND A.MEDICAREID = B.MEDICAREID;
+
+----------------------------------------------------------------------------------------
+-- 2023-12-06 - Cody Piazza - DE Agent ID Fix - - END
+----------------------------------------------------------------------------------------
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, Agent_ID, ReportDate) ON enroll_agentID_deDupped;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (AGENT_ID),
+COLUMN (REPORTDATE ,MEMBERID ,MEDICAREID,AGENT_ID),
+COLUMN (REPORTBEGINDATE)
+ON enroll_agentID_deDupped;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 12: De dup records; difference should match dup count from step 11.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when Agent_Dup_check>1 then 1 else 0 end) as DupCount
+from enroll_agentID_deDupped
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_agentID) final;
+
+drop table enroll_agentID;
+
+CREATE MULTISET VOLATILE TABLE enroll_agentID_deDupped_1 AS (
+SELECT *
+FROM enroll_agentID_deDupped
+WHERE MONTH(reportbegindate) IN (1,2,3,4,5,6)
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+CREATE MULTISET VOLATILE TABLE enroll_agentID_deDupped_2 AS (
+SELECT *
+FROM enroll_agentID_deDupped
+WHERE MONTH(reportbegindate) IN (7,8,9,10,11,12)
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+---add agent information to enrollment records pull select * from AgentReference where medicareid = '4UJ8M53AA46'
+CREATE MULTISET VOLATILE TABLE enroll_agent_1 AS (
+select enroll.*,
+agt_lkp.Agent_Name,
+--Adding Agent NPN from agent agreement history
+agt_lkp.NPN as AGENT_NPN,
+agt_lkp.TOPLINE_NAME,
+agt_lkp.Topline_Role,
+agt_lkp.TOPLINE_ID,
+agt_lkp.HIERARCHY_TYPE_D as Channel, --Note: Look into mapping to update (2022.06.03)
+agt_lkp.HIERARCHY_SUB_TYPE_D as Subchannel,
+--agt_lkp.SalesChannel_D removed from agent hierarchy
+case
+--11/13/2024 Changes from Salesforce Channel Information
+WHEN enroll.agent_id = 'A454638' then 'Other'
+WHEN enroll.agent_id = 'A210652' then 'Other'
+WHEN enroll.agent_id = 'SLSOPS1' then 'Other'
+WHEN enroll.agent_id = 'ONLINE1' then 'Digital'
+WHEN enroll.agent_id = 'BRKPURL' then 'Other'
+WHEN enroll.agent_id = 'INTCOM1' then 'L-Broker'
+
+when channel = 'Broker' and subchannel = 'Call Center' then 'N-Broker'
+when channel = 'Broker' and subchannel = 'Field' then 'L-Broker'
+when channel='SNT-Broker' then 'SNT-Broker'
+when channel='Seniors Private Exchange' then 'Seniors Private Exchange'
+when subchannel in ('BSR','Field') then 'Field Sales'
+when subchannel = 'Telesales' then 'DTC/Telesales'
+when subchannel = 'Cigna Online' then 'Digital'
+when subchannel = 'CMS Online' then 'CMS Online'
+when channel in ('House','Seasonal','DTC') then 'DTC/Telesales'
+else 'Other' end as Sales_Channel,
+DIRECT_UPLINE_ROLE,
+DIRECT_UPLINE_NAME,
+AFMO_Name,
+--Adding new hierarchy levels - NFMO, RFMO, SGA2
+NFMO_NAME,
+RFMO_NAME,
+FMO_Name,
+SGA2_NAME,
+SGA_Name,
+MGA_NAME,
+GA_Name ,
+AFMO_ID,
+NFMO_ID,
+RFMO_ID,
+FMO_ID,
+SGA2_ID,
+SGA_ID,
+MGA_ID,
+GA_ID ,
+agt_lkp.agent_ID||'_'||Topline_ID||'_'||Channel||'_'||Subchannel||'_'||Sales_Channel as AgtKey,
+Region||'_'||Market||'_'||SubMarket||'_'||MicroMarket||'_'||Report_State_County as GeoKey
+
+from enroll_agentID_deDupped_1 as enroll
+
+left join REPORTING_V.AGENT_AGREEMENT_HISTORY as agt_lkp
+on enroll.agent_id = agt_lkp.agent_id
+--11/27/2024 Changes to utilize signature date
+--and enroll.reportbegindate between agt_lkp.AGREEMENT_EFFECTIVE_DATE and agt_lkp.AGREEMENT_END_DATE --where agent_id is not null
+--01/15/2025 Changes for new sale vs DE vs other
+--and COALESCE(enroll.ENRLMT_SIG_DT,enroll.ContinuousEffectiveDate) between agt_lkp.AGREEMENT_EFFECTIVE_DATE and agt_lkp.AGREEMENT_END_DATE
+and case when NEWsaleFLAG = '1' then COALESCE(enroll.ENRLMT_SIG_DT,ENROLL.ContinuousEffectiveDate)
+when disenrollmentflag = '1' then (enroll.reportbegindate-1)
+else enroll.reportbegindate end
+between agt_lkp.AGREEMENT_EFFECTIVE_DATE and agt_lkp.AGREEMENT_END_DATE
+
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+CREATE MULTISET VOLATILE TABLE enroll_agent_2 AS (
+select enroll.*,
+agt_lkp.Agent_Name,
+--Adding Agent NPN from agent agreement history
+agt_lkp.NPN as AGENT_NPN,
+agt_lkp.TOPLINE_NAME,
+agt_lkp.Topline_Role,
+agt_lkp.TOPLINE_ID,
+agt_lkp.HIERARCHY_TYPE_D as Channel, --Note: Look into mapping to update (2022.06.03)
+agt_lkp.HIERARCHY_SUB_TYPE_D as Subchannel,
+--agt_lkp.SalesChannel_D removed from agent hierarchy
+case
+--11/13/2024 Changes from Salesforce Channel Information
+WHEN enroll.agent_id = 'A454638' then 'Other'
+WHEN enroll.agent_id = 'A210652' then 'Other'
+WHEN enroll.agent_id = 'SLSOPS1' then 'Other'
+WHEN enroll.agent_id = 'ONLINE1' then 'Digital'
+WHEN enroll.agent_id = 'BRKPURL' then 'Other'
+WHEN enroll.agent_id = 'INTCOM1' then 'L-Broker'
+
+when channel = 'Broker' and subchannel = 'Call Center' then 'N-Broker'
+when channel = 'Broker' and subchannel = 'Field' then 'L-Broker'
+when channel='SNT-Broker' then 'SNT-Broker'
+when channel='Seniors Private Exchange' then 'Seniors Private Exchange'
+when subchannel in ('BSR','Field') then 'Field Sales'
+when subchannel = 'Telesales' then 'DTC/Telesales'
+when subchannel = 'Cigna Online' then 'Digital'
+when subchannel = 'CMS Online' then 'CMS Online'
+when channel in ('House','Seasonal','DTC') then 'DTC/Telesales'
+else 'Other' end as Sales_Channel,
+DIRECT_UPLINE_ROLE,
+DIRECT_UPLINE_NAME,
+AFMO_Name,
+--Adding new hierarchy levels - NFMO, RFMO, SGA2
+NFMO_NAME,
+RFMO_NAME,
+FMO_Name,
+SGA2_NAME,
+SGA_Name,
+MGA_NAME,
+GA_Name ,
+AFMO_ID,
+NFMO_ID,
+RFMO_ID,
+FMO_ID,
+SGA2_ID,
+SGA_ID,
+MGA_ID,
+GA_ID ,
+agt_lkp.agent_ID||'_'||Topline_ID||'_'||Channel||'_'||Subchannel||'_'||Sales_Channel as AgtKey,
+Region||'_'||Market||'_'||SubMarket||'_'||MicroMarket||'_'||Report_State_County as GeoKey
+
+from enroll_agentID_deDupped_2 as enroll
+
+left join REPORTING_V.AGENT_AGREEMENT_HISTORY as agt_lkp
+on enroll.agent_id = agt_lkp.agent_id
+--11/27/2024 Changes to utilize signature date
+--and enroll.reportbegindate between agt_lkp.AGREEMENT_EFFECTIVE_DATE and agt_lkp.AGREEMENT_END_DATE --where agent_id is not null
+--01/15/2025 Changes for new sale vs DE vs other
+--and COALESCE(enroll.ENRLMT_SIG_DT,enroll.ContinuousEff
+ectiveDate) between agt_lkp.AGREEMENT_EFFECTIVE_DATE and agt_lkp.AGREEMENT_END_DATE
+and case when NEWsaleFLAG = '1' then COALESCE(enroll.ENRLMT_SIG_DT,ENROLL.ContinuousEffectiveDate)
+when disenrollmentflag = '1' then (enroll.reportbegindate-1)
+else enroll.reportbegindate end
+between agt_lkp.AGREEMENT_EFFECTIVE_DATE and agt_lkp.AGREEMENT_END_DATE
+
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+DROP TABLE enroll_agentID_deDupped_1;
+DROP TABLE enroll_agentID_deDupped_2;
+
+CREATE MULTISET VOLATILE TABLE enroll_agent AS (
+SELECT EA1.*, CAST(NULL AS VARCHAR(50)) AS PlanChangeType FROM enroll_agent_1 EA1
+UNION ALL
+SELECT EA2.*, CAST(NULL AS VARCHAR(50)) AS PlanChangeType FROM enroll_agent_2 EA2
+)WITH DATA PRIMARY INDEX(MemberID, MedicareID, Agent_ID, ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+DROP TABLE enroll_agent_1;
+DROP TABLE enroll_agent_2;
+
+--END REGION
+
+-- We will need to load the below data into OSS before we can use the below data
+CREATE SET VOLATILE TABLE VT_REF_CMS_PLAN_CROSSWALK AS (
+SELECT
+YEAR(MIDMONTHDATE) AS PlanChangeYear
+,'Involuntary - '||Description AS Description
+,PREVIOUS_CONTRACT_ID||lpad(PREVIOUS_PLAN_ID, 3, '0')||CURRENT_CONTRACT_ID||lpad(CURRENT_PLAN_ID, 3, '0') AS PlanChangeKey
+FROM BUSINESS_OPS_CORE_V.Ref_CMS_Plan_Crosswalk_2023
+WHERE
+PREVIOUS_CONTRACT_ID||PREVIOUS_PLAN_ID <> CURRENT_CONTRACT_ID||CURRENT_PLAN_ID
+AND PREVIOUS_PLAN_ID <> 'NEW'
+) WITH DATA PRIMARY INDEX (PlanChangeKey) ON COMMIT PRESERVE ROWS;
+
+CREATE SET VOLATILE TABLE VT_REFDATA_INTERNAL_HEALTH_PLAN_CHANGES AS (
+SELECT
+CAST(STRTOK(EFFECTIVEDATE, '/', 3) AS INTEGER) AS PlanChangeYear
+,'Involuntary' AS Description
+,FROMCONTRACT||FROMPBP||TOCONTRACT||TOPBP AS PlanChangeKey
+FROM REFDATA_CORE_V.INTRNL_HLTH_PLN_CHNG
+WHERE FROMCONTRACT||FROMPBP <> TOCONTRACT||TOPBP
+) WITH DATA PRIMARY INDEX (PlanChangeKey) ON COMMIT PRESERVE ROWS;
+
+CREATE SET VOLATILE TABLE VT_PLAN_CHANGES AS (
+SELECT
+COALESCE(REFDATA.PlanChangeYear, XWALK.PlanChangeYear) AS PlanChangeYear
+,COALESCE(XWALK.Description, REFDATA.Description) AS Description
+,COALESCE(REFDATA.PlanChangeKey, XWALK.PlanChangeKey) AS PlanChangeKey
+FROM VT_REFDATA_INTERNAL_HEALTH_PLAN_CHANGES REFDATA
+FULL OUTER JOIN VT_REF_CMS_PLAN_CROSSWALK XWALK
+ON REFDATA.PlanChangeKey = XWALK.PlanChangeKey
+AND REFDATA.PlanChangeYear = XWALK.PlanChangeYear
+) WITH DATA PRIMARY INDEX (PlanChangeKey) ON COMMIT PRESERVE ROWS;
+
+CREATE SET VOLATILE TABLE VT_NEW_YEAR_PLAN_CHANGES AS (
+SELECT
+CURR.MedicareID
+, PREV.ReportBeginDate AS PreviousReportBeginDate
+, CURR.ReportBeginDate AS NewReportBeginDate
+, PREV.HCODE||'_'||PREV.PBP AS PreviousContractPBP
+, CURR.HCODE||'_'||CURR.PBP AS NewContractPBP
+, COALESCE(PLANS_CHANGES.Description,PLANS_DELETED.Description,'Voluntary') AS PlanChangeType
+FROM enroll_agent CURR
+JOIN enroll_agent PREV
+ON MONTH(CURR.ReportBeginDate) = 1 -- Only looking for plans that have changed in January, since that is when internal health plan changes occur
+AND CURR.MedicareID = PREV.MedicareID -- Same Medicare ID for January and the previous December
+AND PREV.ReportBeginDate = CURR.REPORTBEGINDATE - INTERVAL '1' MONTH
+AND PREV.HCODE||PREV.PBP <> CURR.HCODE||CURR.PBP -- Only captures ContractPBP Changes
+LEFT JOIN VT_PLAN_CHANGES PLANS_CHANGES
+ON PREV.HCODE||PREV.PBP||CURR.HCODE||CURR.PBP = PLANS_CHANGES.PlanChangeKey
+AND YEAR(CURR.REPORTBEGINDATE) = PLANS_CHANGES.PlanChangeYear
+LEFT JOIN VT_PLAN_CHANGES PLANS_DELETED
+ON PLANS_DELETED.PlanChangeKey IN (PREV.HCODE||PREV.PBP||'DEL'||'DEL', PREV.HCODE||PREV.PBP||CURR.HCODE||'DEL')
+AND YEAR(CURR.REPORTBEGINDATE) = PLANS_DELETED.PlanChangeYear
+QUALIFY ROW_NUMBER() OVER (PARTITION BY CURR.MedicareID,CURR.ReportBeginDate ORDER BY 1) = 1 -- Arbitrary dedupe of ~5 records. Can be removed when GR_MEMBER is properly deduped
+)WITH DATA PRIMARY INDEX (MedicareID,NewReportBeginDate,PreviousReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+UPDATE A
+FROM
+enroll_agent A
+,VT_NEW_YEAR_PLAN_CHANGES B
+SET
+PlanChangeType = B.PlanChangeType
+WHERE
+A.ReportBeginDate = B.NewReportBeginDate
+AND A.MedicareID = B.MedicareID;
+
+UPDATE A
+FROM
+enroll_agent A
+SET
+PlanChangeType = 'Voluntary'
+WHERE
+A.PlanChangeType IS NULL
+AND A.PlanChangeFlag = 1;
+
+UPDATE A
+FROM
+enroll_agent A
+SET
+PlanChangeType = NULL
+WHERE
+A.PlanChangeFlag = 0;
+
+DROP TABLE VT_REF_CMS_PLAN_CROSSWALK;
+DROP TABLE VT_REFDATA_INTERNAL_HEALTH_PLAN_CHANGES;
+DROP TABLE VT_PLAN_CHANGES;
+DROP TABLE VT_NEW_YEAR_PLAN_CHANGES;
+
+--COLLECT STATS COLUMN (MemberID, MedicareID, Agent_ID, ReportDate) ON enroll_agent;
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 13: Map agent ID to agent hierarchy.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, sum(case when Agent_Dup_check>1 then 1 else 0 end) as DupCount
+from enroll_agent
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM enroll_agentID_deDupped) final;
+
+drop table enroll_agentID_deDupped;
+
+--END REGION
+
+----------------------------------------------------------------------------------------
+-- 2023-12-06 - Neha Soni - Rapid Disenrollment Flag in GR_MEMBER - START
+----------------------------------------------------------------------------------------
+
+CREATE SET VOLATILE TABLE VT_SALE_DE AS (
+SELECT
+MedicareID,
+ReportBeginDate,
+CASE
+WHEN NewSaleFlag = 1 THEN 'Sale'
+WHEN DisenrollmentFlag = 1 THEN 'DE'
+END AS RowType,
+DENSE_RANK() OVER (PARTITION BY MedicareID ORDER BY ReportBeginDate) as CurrRec,
+DENSE_RANK() OVER (PARTITION BY MedicareID ORDER BY ReportBeginDate) + 1 as NextRec
+FROM enroll_agent A
+WHERE NewSaleFlag=1 OR DisenrollmentFlag=1
+) WITH DATA PRIMARY INDEX (MedicareID,ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+CREATE SET VOLATILE TABLE VT_RAPID_DE AS (
+SELECT
+A.MedicareID,
+B.ReportBeginDate as EnrollmentStartDate,
+CASE
+WHEN A.RowType = 'Sale' THEN B.ReportBeginDate
+WHEN A.RowType = 'DE' THEN A.ReportBeginDate
+END AS EnrollmentEndDate,
+ROUND(MONTHS_BETWEEN(EnrollmentEndDate, EnrollmentStartDate)) AS LengthofEnrollment,
+CASE WHEN LengthofEnrollment <= 3 THEN 1 ELSE 0 END AS RapidDisenrollmentFlag
+FROM VT_SALE_DE A
+LEFT JOIN VT_SALE_DE B
+ON A.MedicareID = B.MedicareID
+AND A.CurrRec = B.NextRec
+WHERE
+B.MedicareID IS NOT NULL
+AND A.RowType <> 'Sale'
+) WITH DATA PRIMARY INDEX (MedicareID,EnrollmentStartDate) ON COMMIT PRESERVE ROWS;
+
+CREATE MULTISET VOLATILE TABLE VT_ENROLL_AGENT_WITH_RDE_FLAG AS (
+SELECT
+A.*,
+COALESCE(B.RapidDisenrollmentFlag, 0) AS RapidDisenrollmentFlag
+FROM enroll_agent A
+LEFT JOIN VT_RAPID_DE B
+ON A.MedicareID = B.MedicareID
+AND A.ReportBeginDate = B.EnrollmentStartDate
+) WITH DATA PRIMARY INDEX (MedicareID,ReportBeginDate) ON COMMIT PRESERVE ROWS;
+
+DROP TABLE enroll_agent;
+
+--REGION Create Final Table
+DELETE FROM REPORTING_T.GR_MEMBER ALL;
+INSERT INTO REPORTING_T.GR_MEMBER
+SELECT
+ReportDate,
+ReportBeginDate,
+ReportEndDate,
+ContinuousEffectiveDate,
+OriginalStartDate,
+EventYear,
+EventDate,
+TRR_Transaction_Date,--MJH Edit (2022.11.10)
+Enrollment_Transaction_Date,--MJH Edit (2022.11.10)
+TRR_Transaction_Date2,--MJH Edit (2022.11.10)
+SignatureDate,--MJH Edit (2022.11.10)
+EffectiveYear,
+DeathDate,
+CustomerDuration,
+CustomerDurationBand,
+IndividualEnterpriseID,
+MemberID,
+COALESCE(MedicareID, 'U') AS MedicareID,
+--HICN,
+--MBI,
+MedicaidID,
+MemberLast,
+MemberFirst,
+MemberMiddle,
+DateofBirth,
+Age,
+Gender,
+CMSDualStatusCode,
+CMSDualStatusCodeDesc,
+MediMediFlag,
+ESRDFlag,
+WorkingAgeFlag,
+InstFlag,
+HospiceFlag,
+LISFlag,
+HospiceMMRFlag,
+ESRDMMRFlag,
+RiskScore,
+LanguageDesc,
+MemberZip,
+MemberLatitude,
+MemberLongitude,
+RegionCode,
+HHVIDesc,
+MemberCounty,
+MemberState,
+SSA_MemberState_MemberCounty,
+MMRCounty,
+MMRState,
+SSA_MMRState_MMRCounty,
+PCPID,
+PCPName,
+PCPNPI,
+PCPTIN,
+ProviderLatitude,
+ProviderLongitude,
+AttributedPCPIndicator,
+P4QFlag,
+PCPCounty,
+PCPState,
+SSA_PCPState_PCPCounty,
+Report_SSA,
+Region,
+Market,
+SubMarket,
+MicroMarket,
+Report_State_County,
+ExpansionYear,
+ExpansionType,
+SARIndicator,
+HCODE,
+PBP,
+SegmentID,
+ContractIDPBPSegment,
+ProductType,
+PlanType,
+SNPType,
+PlanName,
+PlanTypeReporting,
+Group_MA_Flag,
+Monthly_Consolidated_Premium,
+PremiumBand,
+EngagementCode,
+Engagement,
+ManagingEntity,
+ReportingPod,
+PodCode,
+PodName,
+GroupID,
+EGWPIndicator,
+BusinessName,
+EMPLR_GRP_ID,
+EMPLR_GRP_ACCT_NUM,
+EMPLR_GRP_NM,
+EMPLR_GRP_BEN_OPT_ID,
+EMPLR_GRP_BEN_OPT_NM,
+EMPLR_GRP_BRNCH_ID,
+EMPLR_GRP_BRNCH_NM,
+EMPLR_GRP_EFF_DT,
+EMPLR_GRP_TERM_DT,
+PRODT_SUB_TY,
+COALESCE(Agent_ID, 'U') AS Agent_ID,
+Agent_Name,
+--Adding Agent NPN from agent agreement history
+AGENT_NPN,
+TOPLINE_NAME,
+TOPLINE_ROLE,
+TOPLINE_ID,
+Channel,
+Subchannel,
+Sales_Channel,
+DIRECT_UPLINE_ROLE,
+DIRECT_UPLINE_NAME,
+AFMO_Name,
+--Adding new hierarchy levels - NFMO, RFMO, SGA2
+NFMO_NAME,
+RFMO_NAME,
+FMO_Name,
+SGA2_NAME,
+SGA_Name,
+MGA_NAME,
+GA_Name ,
+AFMO_ID,
+NFMO_ID,
+RFMO_ID,
+FMO_ID,
+SGA2_ID,
+SGA_ID,
+MGA_ID,
+GA_ID ,
+EFFDATE,
+TERMDATE,
+TRR_Prior_HCode_PBP,
+TRR_Prior_HCode,
+TRR_Prior_PBP,
+TRR_Prior_ParentOrganization,
+TRR_Prior_PlanTypeReporting,
+TRR_TransactionReplyCode,
+TRR_TRCShortName,
+TRR_ElectionType,
+TRR_RecType,
+DECode,
+DEType,
+DEDesc,
+DECategory,
+CompetitorContract,
+CompetitorName,
+CompetitorPlanType,
+NewSaleFlag,
+PlanChangeFlag,
+PlanChangeType,
+DisenrollmentFlag,
+RapidDisenrollmentFlag,
+BeginningMembershipFlag,
+EndingMembershipFlag,
+current_timestamp as LastUpdated,
+--8/21/2024: Adding the following columns as per business request
+SourceDataKey,
+SourceMemberKey
+from VT_ENROLL_AGENT_WITH_RDE_FLAG
+where EXTRACT (YEAR FROM ReportDate) between (select MinYear from ReportYearReference) AND (select MaxYear from ReportYearReference)
+;
+
+--2023-04-28 - Cody Piazza - Added via HELPSTATS recommendation
+COLLECT STATS
+COLUMN (EVENTDATE),
+COLUMN (CONTRACTIDPBPSEGMENT),
+COLUMN (
+REPORTBEGINDATE ,
+EVENTYEAR,
+CUSTOMERDURATION ,
+CUSTOMERDURATIONBAND ,
+GENDER ,
+LISFLAG ,
+PCPNAME,
+REGION ,
+MARKET ,
+SUBMARKET ,
+MICROMARKET ,
+REPORT_STATE_COUNTY,
+EXPANSIONYEAR ,
+EXPANSIONTYPE ,
+HCODE ,
+PBP ,
+SEGMENTID,
+CONTRACTIDPBPSEGMENT ,
+PLANTYPEREPORTING ,
+GROUP_MA_FLAG,
+PREMIUMBAND ,
+ENGAGEMENTCODE ,
+ENGAGEMENT ,
+MANAGINGENTITY,
+REPORTINGPOD ,
+PODCODE ,
+PODNAME ,
+AGENT_NAME ,
+--Add AGENT NPN
+AGENT_NPN,
+TOPLINE_NAME,
+CHANNEL ,
+SUBCHANNEL ,
+AFMO_NAME ,
+--Adding new hierarchy levels - NFMO, RFMO, SGA2
+NFMO_NAME,
+RFMO_NAME,
+FMO_Name,
+SGA2_NAME,
+SGA_Name,
+MGA_NAME,
+GA_Name ,
+TRR_PRIOR_PLANTYPEREPORTING ,
+COMPETITORNAME
+),
+COLUMN (REPORTDATE),
+COLUMN (REPORTDATE ,INDIVIDUALENTERPRISEID),
+COLUMN (EVENTYEAR),
+COLUMN (INDIVIDUALENTERPRISEID)
+ON REPORTING_T.GR_MEMBER;
+
+DROP TABLE ReportYearReference;
+
+----------------------------------------------------------------------------------------
+-- 2023-12-06 - Neha Soni - Rapid Disenrollment Flag in GR_MEMBER - END
+----------------------------------------------------------------------------------------
+
+--End Region
+
+--data quality check for step
+insert into data_quality_checks
+select current_date() as RunDate,
+current_user as CurrentUser,
+'GR_Member' as ScriptBuild,
+cast('Step 14: Insert data into final table that is stored on REPORTING.' as varchar(500)) as ScriptStep,
+sum(RowCount) as RowCount,
+sum(RowCountSource) as RowCountSource,
+sum(RowCount) - sum(RowCountSource) as RowCountDifference,
+sum(DupCount) as DupCount
+FROM
+(select count(*) as RowCount, cast(0 as float) as RowCountSource, 0 as DupCount
+from REPORTING_V.GR_MEMBER
+union ALL
+select 0 as RowCount, count(*) as RowCountSource, 0 as DupCount
+FROM VT_ENROLL_AGENT_WITH_RDE_FLAG) final;
+
+--Write the data_quality checks to a table for documentation
+DELETE FROM REPORTING_T.GR_MEMBER_DATA_QUALITY_CHECKS_FINAL ALL;
+INSERT INTO REPORTING_T.GR_MEMBER_DATA_QUALITY_CHECKS_FINAL
+select *
+from data_quality_checks
+;
+--end region
+
+DROP TABLE data_quality_checks;
+DROP TABLE VT_ENROLL_AGENT_WITH_RDE_FLAG;
+
+CALL HSPROCS.ABC_HEADER_LOAD('PROC_FOR_GR_MEMBER_JJ_LOAD','',:PROC_MSG);
+CALL HSPROCS.ABC_DETAIL_LOAD_TD2TD('PROC_FOR_GR_MEMBER_JJ_LOAD',1,'TGT',:PROC_MSG);
+
+SET PROC_MSG ='PROC_FOR_GR_MEMBER_JJ EXECUTED SUCCESSFULLY';
+
+END;
+
+
+
+------------------------
+REPLACE PROCEDURE HSPROCS.
+PROC_FOR_SUBMITTED_APPS_ORG
+(OUT PROC_MSG VARCHAR(300))
+
+SQL SECURITY INVOKER
+BEGIN
+
+DELETE FROM REPORTING_T.SUBMITTED_APPS_ORG;
+
+-- Pivotal and AZ static - not need to update daily
+
+--DELETE FROM HSLABCustAnalytics.Submitted_Apps_ORG WHERE AppSource = 'Pivotal';
+--Pivotal Data Static. Pre Salesforce up to 1/1/2020
+--INSERT INTO HSLABGrowthRpt.Submitted_Apps_ORG
+INSERT INTO REPORTING_T.SUBMITTED_APPS_ORG
+SELECT
+P_EH_A.HIC,
+CASE WHEN INDEX(P_EH_A.QNXT_Secondary_ID,'*') > 1 THEN
+LEFT(P_EH_A.QNXT_Secondary_ID,INDEX(P_EH_A.QNXT_Secondary_ID,'*')-1) END AS Secondary_ID,
+CAST(NULL AS VARCHAR(50)) AS SubscriberID,
+CAST(CAST((P_L.Individual_Date_Of_Birth (format 'YYYYMMDD')) as VARCHAR(8)) AS INTEGER) AS DOB_KEY,
+TRIM(P_L.EH_Lead_ID_Int) AS EH_Lead_ID_Int,
+P_L.First_Name,
+P_L.Last_Name,
+CAST(NULL AS VARCHAR (50)) AS Region_ORG,
+P_R.Region_Name AS Market_ORG,
+P_EH_M.Market_Name AS Micromarket_ORG,
+CAST(NULL AS VARCHAR (50)) AS Channel_ORG,
+ECV_C.County_Name,
+CASE WHEN LENGTH(COALESCE(P_EH_M.State_,'n'))>2 THEN P_EH_M.State_ ELSE ECV_C.State_ END AS State,
+P_EH_A.Lead_Zip,
+TRIM(P_EH_A.Application_ID_Int) AS Application_ID_Int,
+P_EH_A.App_Signed_Date,
+P_EH_A.App_Date_Received,
+P_EH_A.App_Date_Entered,
+P_EH_A.App_Effective_Date,
+P_EH_A.Application_Status,
+P_EH_A.EnrollmentSource,
+CAST(NULL AS VARCHAR(50)) AS OriginalDriver,
+CAST(NULL AS VARCHAR(50)) AS CurrentDriver,
+CAST(NULL AS VARCHAR(50)) AS CurrentCampaign,
+CAST(NULL AS VARCHAR(50)) AS CurrentCampaignMod,
+CAST(NULL AS VARCHAR(50)) AS OriginalCampaign,
+CAST(NULL AS VARCHAR(50)) AS OriginalCampaignMod,
+CAST(NULL AS VARCHAR(50)) AS AppCampaign,
+CAST(NULL AS VARCHAR(50)) AS AppParentCampaign,
+PLAN.CONTRACT_NUMBER,
+-- PLAN.PLAN_NUMBER not in ORG app table to derive, leave in this query
+SUBSTR ('000',1,3-LENGTH(PLAN.PLAN_NUMBER)) || PLAN.PLAN_NUMBER AS PBP,
+CAST(NULL AS VARCHAR(50)) AS Segment,
+PLAN.PLAN_NAME,
+CAST(NULL AS VARCHAR(50)) AS Plan,
+CAST(NULL AS VARCHAR(50)) AS Org_Type,
+CAST(NULL AS VARCHAR(50)) AS SNP,
+P_A.EH_Agent_Id,
+P_A.Full_Name AS AgentName,
+P_A.EH_Agent_Type,
+P_A.EH_External_Agent_Type,
+P_ACY1.EH_Agency_Id AS EH_GA_ID,
+CASE WHEN RIGHT(P_ACY1.AGENCY_NAME,3) LIKE '-GA' THEN UPPER(LEFT(P_ACY1.AGENCY_NAME, CHARACTER_LENGTH(P_ACY1.AGENCY_NAME)-3)) ELSE UPPER(P_ACY1.AGENCY_NAME) END AS GA,
+P_ACY2.EH_Agency_Id AS EH_MGA_ID,
+UPPER(P_ACY2.AGENCY_NAME) AS MGA,
+P_ACY3.EH_Agency_Id AS EH_SGA_ID,
+UPPER(P_ACY3.AGENCY_NAME) AS SGA,
+P_ACY4.EH_Agency_Id AS EH_FMO_ID,
+UPPER(P_ACY4.AGENCY_NAME) AS FMO,
+CAST(NULL AS VARCHAR(50)) AS toplineid,
+CAST(NULL AS VARCHAR(50)) AS Topline,
+CAST(NULL AS VARCHAR(50)) AS Topline_Type,
+'Pivotal' AS AppSource,
+CAST(CURRENT_TIMESTAMP(0) AT LOCAL AS TIMESTAMP(0)) AS LOAD_DTTS,
+cast(cast(P_EH_A.App_Effective_Date as date format 'YYYYMMDD') as varchar(8)) AS effectiveDateKey
+FROM (((((((((PIVOTALSALES_ED_CORE_V.EH_APPLICATION AS P_EH_A
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.AGENCY AS P_ACY1
+ON (P_EH_A.Agency_ID = P_ACY1.Agency_ID))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.AGENCY AS P_ACY2
+ON (P_EH_A.MGA_ID = P_ACY2.Agency_ID))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.AGENCY AS P_ACY3
+ON (P_EH_A.SGA_ID = P_ACY3.Agency_ID))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.AGENCY AS P_ACY4
+ON (P_EH_A.FMO_ID = P_ACY4.Agency_ID))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.PLAN_ PLAN
+ON (P_EH_A.Plan_Id = plan.PLAN__ID))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.AGENT AS P_A
+ON (P_EH_A.Agent_Id = P_A.Agent_Id))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.REGION AS P_R
+ON (P_EH_A.Region_Id = P_R.Region_Id))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.LEAD_ AS P_L
+ON (P_EH_A.Lead_ID = P_L.Lead__Id))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.COUNTY AS ECV_C
+ON (P_L.County_Id = ECV_C.COUNTY_ID))
+LEFT OUTER JOIN PIVOTALSALES_ED_CORE_V.EH_MARKET AS P_EH_M
+ON (P_EH_A.EH_Market_Id = P_EH_M.EH_Market_Id)
+
+-- Set start and end dates as DATE 'YYYY-MM-DD'
+WHERE (P_EH_A.App_Effective_Date BETWEEN DATE '2018-01-01' AND DATE '2019-12-31')------changed this to end of 2019 so that 1/1/2020 rows come from SF
+;
+
+COLLECT STATS COLUMN (AppID) ON REPORTING_T.SUBMITTED_APPS_ORG;
+
+--DELETE FROM HSLABCustAnalytics.Submitted_Apps_ORG WHERE AppSource = 'AZ SF';
+-- AZ Salesforce Data Static. Pre Salesforce up to 1/1/2020
+--INSERT INTO HSLABGrowthRpt.Submitted_Apps_ORG
+INSERT INTO REPORTING_T.SUBMITTED_APPS_ORG
+SELECT
+A_E."Medicare Claim # (HIC)",
+CAST(NULL AS VARCHAR(50)) AS Secondary_ID,
+A_E."MAPD AMI #",
+CAST(CAST((A_E.Birthdate (format 'YYYYMMDD')) as VARCHAR(8)) AS INTEGER) AS DOB_KEY,
+A_E."Contact ID",
+LEFT(A_E."Full Name",INDEX(A_E."Full Name",' ')) AS First_Name,
+CASE WHEN INDEX(RIGHT(OREPLACE(A_E."Full Name",'.',''), CHARACTER_LENGTH(OREPLACE(A_E."Full Name",'.',''))-INDEX(OREPLACE(A_E."Full Name",'.',''),' ')),' ') = 2 THEN
+RIGHT(OREPLACE(A_E."Full Name",'.',''), CHARACTER_LENGTH(OREPLACE(A_E."Full Name",'.',''))-(INDEX(OREPLACE(A_E."Full Name",'.',''),' ')+INDEX(RIGHT(OREPLACE(A_E."Full Name",'.',''), CHARACTER_LENGTH(OREPLACE(A_E."Full Name",'.',''))-INDEX(OREPLACE(A_E."Full Name",'.',''),' ')),' ')))
+ELSE RIGHT(A_E."Full Name", CHARACTER_LENGTH(A_E."Full Name")-INDEX(A_E."Full Name",' '))
+END AS Last_Name,
+CAST(NULL AS VARCHAR(50)) AS Region_ORG,
+CAST(NULL AS VARCHAR(50)) AS Market_ORG,
+CAST(NULL AS VARCHAR(50)) AS MicroMarket_ORG,
+CAST(NULL AS VARCHAR (50)) AS Channel_ORG,
+CAST(NULL AS VARCHAR (50)) AS County,
+CAST(NULL AS VARCHAR (50)) AS State,
+CASE WHEN (UPPER(A_E."Mailing State/Province") = 'AZ' AND (LENGTH(TRYCAST(LEFT(A_E."Mailing Zip/Postal Code",5) AS INTEGER)) = 5)) THEN LEFT(A_E."Mailing Zip/Postal Code",5) END AS Zip,
+CAST(NULL AS VARCHAR (50)) AS AppID,
+A_E."MAPD Date Application Signed",
+A_E."MAPD Date Application Received",
+CAST(NULL AS DATE) AS Entered,
+A_E."MAPD Enrollment Effective Date",
+A_E."MAPD Lead Disposition",
+A_E."MAPD Enrollment Method",
+CAST(NULL AS VARCHAR(50)) AS OriginalDriver,
+CAST(NULL AS VARCHAR(50)) AS CurrentDriver,
+CAST(NULL AS VARCHAR(50)) AS CurrentCampaign,
+CAST(NULL AS VARCHAR(50)) AS CurrentCampaignMod,
+CAST(NULL AS VARCHAR(50)) AS OriginalCampaign,
+CAST(NULL AS VARCHAR(50)) AS OriginalCampaignMod,
+CAST(NULL AS VARCHAR(50)) AS AppCampaign,
+CAST(NULL AS VARCHAR(50)) AS AppParentCampaign,
+CAST(NULL AS VARCHAR(50)) AS Contract,
+CAST(NULL AS VARCHAR(50)) AS PBP,
+CAST(NULL AS VARCHAR(50)) AS SegmentID,
+A_P."Product Description" AS PlanName,
+CAST(NULL AS VARCHAR(50)) AS Plan,
+CAST(NULL AS VARCHAR(50)) AS OrgType,
+CAST(NULL AS VARCHAR(50)) AS SNP,
+A_E."Agent ID",
+UPPER(A_E."Account Name") AS Agent,
+CAST(NULL AS VARCHAR(50)) AS "Agent Type",
+CAST(NULL AS VARCHAR(50)) AS "Agent Sub Type",
+CAST(NULL AS VARCHAR(50)) AS GAID,
+CAST(NULL AS VARCHAR(50)) AS GA,
+CAST(NULL AS VARCHAR(50)) AS MGAID,
+CAST(NULL AS VARCHAR(50)) AS MGA,
+CAST(NULL AS VARCHAR(50)) AS SGAID,
+CAST(NULL AS VARCHAR(50)) AS SGA,
+CAST(NULL AS VARCHAR(50)) AS FMO,
+CAST(NULL AS VARCHAR(50)) AS FMO_ID,
+CAST(NULL AS VARCHAR(50)) AS toplineid,
+CAST(NULL AS VARCHAR(50)) AS Topline,
+CAST(NULL AS VARCHAR(50)) AS Topline_Type,
+'AZ SF' As AppSource,
+CAST(CURRENT_TIMESTAMP(0) AT LOCAL AS TIMESTAMP(0)) AS LOAD_DTTS,
+cast(cast(A_E."MAPD Enrollment Effective Date" as date format 'YYYYMMDD') as varchar(8)) AS effectiveDateKey
+--FROM HSLABGrowthRpt.AZ_Extract A_E
+FROM BUSINESS_OPS_CORE_V.AZ_EXTRACT A_E
+--LEFT OUTER JOIN HSLABGrowthRpt.AZ_Products AS A_P
+LEFT OUTER JOIN BUSINESS_OPS_CORE_V.AZ_PRODUCTS AS A_P
+ON (A_E."MAPD Product Code: Product Number" = A_P."Product Number")
+;
+
+COLLECT STATS COLUMN (AppID) ON REPORTING_T.SUBMITTED_APPS_ORG;
+
+-- LEON OSS Data
+--DELETE FROM HSLABGrowthRpt.Submitted_Apps_ORG WHERE AppSource = 'LEON OSS';
+DELETE FROM REPORTING_T.SUBMITTED_APPS_ORG WHERE AppSource = 'LEON OSS';
+
+--INSERT INTO HSLABGrowthRpt.Submitted_Apps_ORG
+INSERT INTO REPORTING_T.SUBMITTED_APPS_ORG
+SELECT
+en.HICN,
+en.MemberID,
+CAST(NULL AS VARCHAR(50)) AS SubscriberID,
+CAST(CAST((cn.DOB (format 'YYYYMMDD')) as VARCHAR(8)) AS INTEGER) AS DOB_KEY,
+en.CONTACTID,
+cn.FIRSTNAME,
+cn.LASTNAME,
+CAST(NULL AS VARCHAR(50)) AS Region_ORG,
+CAST(NULL AS VARCHAR(50)) AS Market_ORG,
+CAST(NULL AS VARCHAR(50)) AS MicroMarket_ORG,
+CAST(NULL AS VARCHAR (50)) AS Channel_ORG,
+CAST(NULL AS VARCHAR(50)) AS County,
+CAST(NULL AS VARCHAR(50)) AS State,
+CASE WHEN cn.StateID = 29 THEN cn.Zipcode END AS Zip, -- 29 = FL
+TRIM(en.ENROLLMENTID) AS ENROLLMENTID,
+en.ENROLLMENTDATE,
+en.ENTRYDATE,
+en.ENTRYDATE,
+en.EFFECTIVEDATE,
+es.NAME, -- Status
+ty.DESCRIPTION,
+CAST(NULL AS VARCHAR(50)) AS OriginalDriver,
+CAST(NULL AS VARCHAR(50)) AS CurrentDriver,
+CAST(NULL AS VARCHAR(50)) AS CurrentCampaign,
+CAST(NULL AS VARCHAR(50)) AS CurrentCampaignMod,
+CAST(NULL AS VARCHAR(50)) AS OriginalCampaign,
+CAST(NULL AS VARCHAR(50)) AS OriginalCampaignMod,
+CAST(NULL AS VARCHAR(50)) AS AppCampaign,
+CAST(NULL AS VARCHAR(50)) AS AppParentCampaign,
+CAST(NULL AS VARCHAR(50)) AS Contract,
+CAST(NULL AS VARCHAR(50)) AS PBP,
+CAST(NULL AS VARCHAR(50)) AS Segment,
+CAST(NULL AS VARCHAR(50)) AS Plan_Name,
+CAST(NULL AS VARCHAR(50)) AS Plan,
+CAST(NULL AS VARCHAR(50)) AS Product,
+CAST(NULL AS VARCHAR(50)) AS SNP,
+-- NOTE: employed reps do not have an agent id
+UPPER(sb.SIGNINGBROKERID) AS AgentID,
+-- Choose name for employed rep or broker
+CASE WHEN UPPER(us.FIRSTNAME) = '_SYSTEM' THEN UPPER(sb.FIRSTNAME)||' '||UPPER(sb.LASTNAME)
+ELSE UPPER(us.FirstName)||' '||UPPER(us.LastName)
+END AS Agent_c,
+CAST(NULL AS VARCHAR(50)) AS AgentType,
+CAST(NULL AS VARCHAR(50)) AS ExternalAgentType,
+CAST(NULL AS VARCHAR(50)) AS GA_ID,
+CAST(NULL AS VARCHAR(50)) AS GA,
+CAST(NULL AS VARCHAR(50)) AS MGA_ID,
+CAST(NULL AS VARCHAR(50)) AS MGA,
+CAST(NULL AS VARCHAR(50)) AS SGA_ID,
+CAST(NULL AS VARCHAR(50)) AS SGA,
+CAST(NULL AS VARCHAR(50)) AS FMO_ID,
+CAST(NULL AS VARCHAR(50)) AS FMO,
+CAST(NULL AS VARCHAR(50)) AS toplineid,
+CAST(NULL AS VARCHAR(50)) AS Topline,
+CAST(NULL AS VARCHAR(50)) AS Topline_Type,
+'LEON OSS' AS AppSource,
+CAST(CURRENT_TIMESTAMP(0) AT LOCAL AS TIMESTAMP(0)) AS LOAD_DTTS,
+cast(cast(en.EFFECTIVEDATE as date format 'YYYYMMDD') as varchar(8))
+FROM ((((((TELETRACKER_CORE_V.LMCTT_ENROLLMENT en
+INNER JOIN TELETRACKER_CORE_V.LMCTT_CONTACT cn
+ON (en.CONTACTID = cn.CONTACTID))
+INNER JOIN TELETRACKER_CORE_V.LMCTT_USER us
+ON (en.SALESPERSONID = us.USERID))
+INNER JOIN TELETRACKER_CORE_V.LMCTT_ENROLLMENTSTATUS es
+ON (en.ENROLLMENTSTATUSID = es.ENROLLMENTSTATUSID))
+LEFT OUTER JOIN TELETRACKER_CORE_V.LMCTT_SIGNINGBROKER_CONTACT sb
+ON (en.BROKERID = sb.SBROKERID))
+LEFT OUTER JOIN TELETRACKER_CORE_V.LMCTT_SIGNINGBROKER_GROUP sg
+ON (sg.GROUPID = sb.GROUPID))
+LEFT OUTER JOIN TELETRACKER_CORE_V.LMCTT_STATE st
+ON (cn.STATEID = st.STATEID))
+LEFT OUTER JOIN TELETRACKER_CORE_V.LMCTT_SALETYPE ty
+ON (en.SALETYPEID = ty.SALETYPEID)
+WHERE en.EFFECTIVEDATE >= DATE '2017-01-01'
+;
+
+COLLECT STATS COLUMN (AppID) ON REPORTING_T.SUBMITTED_APPS_ORG;
+
+-- HS SF Data
+--DELETE FROM HSLABGrowthRpt.Submitted_Apps_ORG WHERE AppSource = 'HS SF';
+DELETE FROM REPORTING_T.SUBMITTED_APPS_ORG WHERE AppSource = 'HS SF';
+-- Create LEAD table because of JOIN 1000B server error
+CREATE VOLATILE TABLE #lead AS
+(
+SELECT DISTINCT
+s_l.Id,
+s_l.Region__c,
+s_l.Market__c,
+s_l.Micromarket__c,
+s_l.Original_Lead_Driver__c AS OriginalDriver,
+s_l.LeadSource AS CurrentDriver,
+s_cp.NAME_RW AS CurrentCampaign,
+s_cp.LASTMODIFIEDDATE AS CurrentCampaignMod,
+s_cp_1.NAME_RW AS OriginalCampaign,
+s_cp_1.LASTMODIFIEDDATE AS OrigCampaignMod
+FROM (SALES_COMMISSION_CORE_V.SFDC_LEAD s_l
+LEFT OUTER JOIN SALES_COMMISSION_CORE_V.SFDC_CAMPAIGN s_cp_1
+ON (s_l.Original_Campaign_Name__c = s_cp_1.ID))
+LEFT OUTER JOIN SALES_COMMISSION_CORE_V.SFDC_CAMPAIGN s_cp
+ON (s_l.Campaign_Name__c = s_cp.ID)
+WHERE s_l.Id IS NOT NULL
+) WITH DATA PRIMARY INDEX (Id) ON COMMIT PRESERVE ROWS ;
+
+COLLECT STATS COLUMN (Id) ON #lead;
+
+--INSERT INTO HSLABGrowthRpt.Submitted_Apps_ORG
+INSERT INTO REPORTING_T.SUBMITTED_APPS_ORG
+SELECT DISTINCT
+sv_a.MEDICARE_NUMBER__C,
+sv_a.MEMBER_ID__C,
+CAST(NULL AS VARCHAR(50)) AS SubscriberID,
+CAST(CAST((sv_a.DATE_OF_BIRTH__C (format 'YYYYMMDD')) as VARCHAR(8)) AS INTEGER) AS DOB_KEY,
+sv_a.LEAD_ID__C,
+sv_a.FIRST_NAME__C,
+sv_a.LAST_NAME__C,
+#lead.Region__c,
+#lead.Market__c,
+#lead.Micromarket__c,
+sv_a.Sales_Enrollment_Channel__c,
+sv_a.RESIDENTIAL_COUNTY__C,
+sv_a.RESIDENTIAL_STATE__C,
+sv_a.RESIDENTIAL_ZIP_CODE__C AS Zip,
+TRIM(COALESCE(sv_a.APPLICATION_NUMBER__C,0)) AS APPLICATION_NUMBER__C,
+sv_a.DATE_OF_SIGNATURE__C,
+sv_a.APPLICATION_RECEIVED_DATE__C,
+sv_a.APPLICATION_ENTERED_DATE__C,
+sv_a.EFFECTIVE_DATE__C,
+sv_a.VLOCITY_INS__STATUS__C,
+sv_a.APPLICATION_TYPE__C,
+#lead.OriginalDriver,
+#lead.CurrentDriver,
+#lead.CurrentCampaign,
+#lead.CurrentCampaignMod,
+#lead.OriginalCampaign,
+#lead.OrigCampaignMod,
+s_cp.NAME_RW,
+s_cp.CREATIVE__C,
+-- Keep in this query APPLICATION_UPID__C does not carry to end results
+CASE WHEN sv_a.APPLICATION_UPID__C IS NOT NULL
+THEN LEFT(sv_a.APPLICATION_UPID__C, 5) END AS CONTRACT__c,
+CASE WHEN sv_a.APPLICATION_UPID__C IS NOT NULL
+THEN RIGHT(sv_a.APPLICATION_UPID__C, 3) END AS PBP__c,
+RIGHT('000'||sp.SEGMENTATION__C,3) AS SEGMENTATION_C,
+sp.NAME_RW AS PLAN_NAME,
+CAST(NULL AS VARCHAR(50)) AS Plan,
+CAST(NULL AS VARCHAR(50)) AS Org_Type,
+CAST(NULL AS VARCHAR(50)) AS SNP,
+sc.AGENT_WRITING_ID__C,
+sc.NAME_RW,
+sc.AGENT_TYPE__C,
+sc.AGENT_SUB_TYPE__C,
+sv_a.GA_WRITING_ID__C,
+sv_a.GA__C,
+sv_a.MGA_WRITING_ID__C,
+sv_a.MGA__C,
+sv_a.SGA_WRITING_ID__C,
+sv_a.SGA__C,
+sv_a.FMO_WRITING_ID__C,
+sv_a.FMO__C,
+CAST(NULL AS VARCHAR(50)) AS toplineid,
+sv_a.Top_Line__C AS Topline,
+CAST(NULL AS VARCHAR(50)) AS Topline_Type,
+'HS SF' AS AppSource,
+CAST(CURRENT_TIMESTAMP(0) AT LOCAL AS TIMESTAMP(0)) AS LOAD_DTTS,
+cast(cast(sv_a.EFFECTIVE_DATE__C as date format 'YYYYMMDD') as varchar(8))
+
+FROM ((((SALES_COMMISSION_CORE_V.SFDC_VLOCITY_INS__APPLICATION__C sv_a
+LEFT OUTER JOIN SALES_COMMISSION_CORE_V.SFDC_APPLICATION_HIERARCHY__C s_a_h
+ON (sv_a.ID = s_a_h.APPLICATION_RECORD__C))
+LEFT OUTER JOIN #lead #lead
+ON (sv_a.LEAD__C = #lead.Id))
+LEFT OUTER JOIN SALES_COMMISSION_CORE_V.SFDC_PRODUCT2 sp
+ON (sv_a.VLOCITY_INS__PRODUCT2ID__C = sp.ID))
+LEFT OUTER JOIN SALES_COMMISSION_CORE_V.SFDC_CONTACT sc
+ON (sv_a.AGENT__C = sc.ID))
+LEFT OUTER JOIN SALES_COMMISSION_CORE_V.SFDC_CAMPAIGN s_cp
+ON (sv_a.PARENT_CAMPAIGN__C = s_cp.ID)
+
+WHERE (sv_a.EFFECTIVE_DATE__C >= DATE '2020-01-01')
+AND ((s_a_h.TOPLINE_OR_DOWNLINE__C = 'Topline') OR (s_a_h.TOPLINE_OR_DOWNLINE__C IS NULL))
+;
+
+COLLECT STATS COLUMN (AppID) ON REPORTING_T.SUBMITTED_APPS_ORG;
+
+DROP TABLE #lead
+;
+
+--update HSLABGrowthRpt.Submitted_Apps_ORG
+UPDATE REPORTING_T.SUBMITTED_APPS_ORG
+set LOAD_DTTS = CAST(CURRENT_TIMESTAMP(0) AT LOCAL AS TIMESTAMP(0))
+;
+
+COLLECT STATS COLUMN (AppID) ON REPORTING_T.SUBMITTED_APPS_ORG;
+
+CALL HSPROCS.ABC_HEADER_LOAD('PROC_FOR_SUBMITTED_APPS_ORG_LOAD','',:PROC_MSG);
+CALL HSPROCS.ABC_DETAIL_LOAD_TD2TD('PROC_FOR_SUBMITTED_APPS_ORG_LOAD',1,'TGT',:PROC_MSG);
+
+SET PROC_MSG ='PROC_FOR_SUBMITTED_APPS_ORG EXECUTED SUCCESSFULLY';
+
+END;
+------------------------------------------------
+
+REPLACE PROCEDURE HSPROCS.
+PROC_FOR_SUBMITTED_APPS_FINAL
+(OUT PROC_MSG VARCHAR(300))
+
+SQL SECURITY INVOKER
+BEGIN
+/* ******** To Do ******** */
+-- *** Pivotal ***
+-- SegmentID not populated. Do not have a workaround for this for 2017 Sanctions Year.
+
+-- *** AZ ***
+-- Resaearch and Update EGWP Plans for LU table
+-- AZ does not have an appid - how to id if duplicates for a member?
+-- Unknown AZ Agent obsolete IDs:
+/*
+AgentID Agent
+11111111 PENDING BROKER
+20000000 CIGNA INTERNAL
+33333333 BRC NEW LEADS
+99999999 BROKER UNASSIGNED
+10243500 LYLE AASHEIM
+10330867 DAVID ANDERSON
+10369493 MICHAEL RIVERS
+20010452 CAROL BEYER
+20010701 SEASONAL MARIA GONZALEZ
+20050036 LORRAINE WILHARM
+20070025 BRIAN GRISWOLD
+*/
+
+-- *** LEON ***
+
+
+-- *** Global Lookups/fixes ***
+-- HICN/Subscriber to MBI
+-- State
+-- County
+-- Region
+-- Market
+-- Micromarket
+-- Channel
+-- Fill in the blanks
+-- Hoew to fix Effdate Outliers - mostly AZ ie 11/9/2018, 4/1/2105
+
+/*
+ALTER TABLE REPORTINGGrowthRpt.Submitted_Apps_Final
+ADD Writing_ID VARCHAR(50),
+ADD Writing VARCHAR(50),
+ADD WritingType VARCHAR(50),
+ADD Region VARCHAR(50),
+ADD Market VARCHAR(50),
+ADD Submarket VARCHAR(50),
+ADD Micromarket VARCHAR(50),
+ADD Channel VARCHAR(50)
+*/
+/*ALTER TABLE REPORTINGGrowthRpt.Submitted_Apps_Final
+ADD EFFECTIVEDATEKEY CHAR(8);*/
+-- Refresh data from LEON and SF HS Daily. Pivotal and AZ SF is static.
+DELETE FROM REPORTING_T.SUBMITTED_APPS_FINAL
+------WHERE AppSource IN ('LEON OSS',' SF HS')
+;
+INSERT INTO REPORTING_T.SUBMITTED_APPS_FINAL
+SELECT
+Row_Number () over (order by Signed, Received, Entered, Effective) AS ID,
+MedicareID,
+MemberID,
+SubscriberID,
+DOB_KEY,
+LeadID,
+FirstName,
+LastName,
+Region_ORG,
+Market_ORG,
+Micromarket_ORG,
+Channel_ORG,
+County,
+State,
+ZIP,
+coalesce(AppID, TRIM(SubscriberID)||trim(ID), TRIM(LeadID)||trim(ID)) AS AppID,
+Signed,
+Received,
+Entered,
+Effective,
+AppStatus,
+AppEnrollmentSource,
+OriginalDriver,
+CurrentDriver,
+CurrentCampaign,
+CurrentCampaignMod,
+OriginalCampaign,
+OriginalCampaignMod,
+AppCampaign,
+AppParentCampaign,
+-- Contract and Hierarchy
+Contract,
+PBP,
+Segment,
+Plan_Name,
+Plan,
+Product,
+SNP,
+AgentID,
+Agent,
+AgentType,
+AgentSubType,
+
+GA_ID,
+GA,
+MGA_ID,
+MGA,
+SGA_ID,
+SGA,
+FMO_ID,
+FMO,
+ToplineID,
+Topline,
+ToplineType,
+AppSource,
+CAST(CURRENT_TIMESTAMP(0) AT LOCAL AS TIMESTAMP(0)) AS LOAD_DTTS,
+CAST (NULL AS VARCHAR(50)) AS AppCategory,
+CAST (NULL AS VARCHAR(50)) AS Writing_ID,
+CAST (NULL AS VARCHAR(50)) AS Writing,
+CAST (NULL AS VARCHAR(50)) AS WritingType,
+CAST (NULL AS VARCHAR(50)) AS Region,
+CAST (NULL AS VARCHAR(50)) AS Market,
+CAST (NULL AS VARCHAR(50)) AS Submarket,
+CAST (NULL AS VARCHAR(50)) AS Micromarket,
+CAST (NULL AS VARCHAR(50)) AS Channel,
+EFFECTIVEDATEKEY
+FROM REPORTING_V.SUBMITTED_APPS_ORG
+--WHERE AppSource IN ('LEON OSS', 'SF HS')
+;
+
+-- Pivotal and AZ SF data static - not needed to update daily.
+
+-- Pivotal Data Static. Pre Salesforce up to 1/1/2020
+-- Plan
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET PLAN =
+-- Plan Year Prefex
+CASE WHEN InStr(Plan_Name, '2020') > 0 THEN SUBSTR(Plan_Name,(LENGTH(Plan_Name)-INDEX(REVERSE(Plan_Name),'_')+2),LENGTH(Plan_Name)-(LENGTH(Plan_Name)-INDEX(REVERSE(Plan_Name),'_')+2)-(INDEX(REVERSE(Plan_Name),'(')))
+-- Plan Year Suffix
+ELSE CASE WHEN InStr(Plan_Name, '201') > 0 THEN LEFT(Plan_Name, INDEX(Plan_Name,'(')-1)
+-- No Plan Year
+ELSE Plan_Name
+END END
+WHERE AppSource = 'Pivotal' ;
+
+-- Org Type / Product
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Product =
+CASE WHEN InStr(Plan_Name,'HMO')>0 THEN 'HMO'
+ELSE CASE WHEN InStr(Plan_Name, 'PPO') > 0 THEN 'PPO'
+ELSE CASE WHEN LENGTH(COALESCE(Plan_Name,'null')) > 4 THEN 'Unknown'
+END END END
+WHERE AppSource = 'Pivotal' ;
+
+-- SNP
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET SNP =
+CASE WHEN InStr(Plan_Name, 'SNP') > 0 THEN 'SNP'
+ELSE CASE WHEN LENGTH(COALESCE(Plan_Name,'null')) > 4 THEN 'Non-SNP'
+END END
+WHERE AppSource = 'Pivotal' ;
+
+-- Topline
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET
+ToplineID =
+CASE WHEN FMO_ID IS NOT NULL AND FMO_ID NOT LIKE 'G210060' AND FMO_ID NOT LIKE 'G210112' THEN FMO_ID
+ELSE CASE WHEN SGA_ID IS NOT NULL THEN SGA_ID
+ELSE CASE WHEN MGA_ID IS NOT NULL THEN MGA_ID
+ELSE CASE WHEN GA_ID IS NOT NULL THEN GA_ID
+END END END END,
+Topline =
+CASE WHEN FMO_ID IS NOT NULL AND FMO_ID NOT LIKE 'G210060' AND FMO_ID NOT LIKE 'G210112' THEN FMO
+ELSE CASE WHEN SGA_ID IS NOT NULL THEN SGA
+ELSE CASE WHEN MGA_ID IS NOT NULL THEN MGA
+ELSE CASE WHEN GA_ID IS NOT NULL THEN GA
+END END END END,
+ToplineType =
+CASE WHEN FMO_ID IS NOT NULL AND FMO_ID NOT LIKE 'G210060' AND FMO_ID NOT LIKE 'G210112' THEN FMO
+ELSE CASE WHEN SGA_ID IS NOT NULL THEN SGA
+ELSE CASE WHEN MGA_ID IS NOT NULL THEN MGA
+ELSE CASE WHEN GA_ID IS NOT NULL THEN GA
+END END END END
+WHERE AppSource = 'Pivotal' ;
+
+-- AZ Salesforce Static
+-- Market Info
+
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Region_ORG = 'West',
+Market_ORG = 'AZ',
+MicroMarket_ORG = 'Arizona',
+State = 'AZ'
+WHERE AppSource = 'AZ SF'
+;
+
+-- Plan info
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f,
+(
+SELECT DISTINCT PLan_Name,
+Plan,
+Org_Type,
+Contract_Number,
+PBP,
+SNP
+FROM BUSINESS_OPS_CORE_V.LU_AZ_PLAN
+) p
+SET Contract = p.Contract_Number,
+PBP = p.PBP,
+Plan = p.Plan,
+Product = p.Org_Type,
+SNP = p.SNP
+WHERE f.Plan_Name = p.Plan_Name
+AND AppSource = 'AZ SF'
+;
+
+-- Obsolete AZ Agent Codes
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f, BUSINESS_OPS_CORE_V.LU_AZ_AGENTID a
+SET AgentID = a.AgentID_New
+WHERE AgentID = a.AZ_ID
+AND AppSource = 'AZ SF'
+;
+-- Update Agent Type from Pivotal
+
+-- Create a pivotal lookup for AZ Agents
+CREATE MULTISET VOLATILE TABLE #azh AS
+(
+SELECT DISTINCT
+pa.EH_Agent_Id,
+pa.EH_Agent_Type,
+pa.EH_External_Agent_Type, lu.EH_Agency_Type,
+CASE WHEN lu.EH_Agency_Type LIKE 'GA' THEN lu.EH_Agency_Id END AS GAID,
+CASE WHEN lu.EH_Agency_Type LIKE 'GA' THEN lu.Agency_Name END AS GANAME,
+lu.MGAID,
+lu.MGANAME,
+lu.SGAID,
+lu.SGANAME,
+lu.FMOID,
+lu.FMONAME,
+lu.TopLineID,
+lu.TopLine,
+lu.TopLineType,
+lu.Channel
+FROM PIVOTALSALES_ED_CORE_V.AGENT pa
+INNER JOIN BUSINESS_OPS_CORE_V.LU_PIVOTAL_TL_DL lu
+ON (pa.Agency_Id = lu.Agency_Id)
+) WITH DATA ON COMMIT PRESERVE ROWS ;
+
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f, #azh pa
+SET AgentType = pa.EH_Agent_Type,
+AgentSubType = pa.EH_External_Agent_Type,
+GA_ID = pa.GAID,
+GA = pa.GAName,
+MGA_ID = pa.MGAID,
+MGA = pa.MGANAME,
+SGA_ID = pa.SGAID,
+SGA = pa.SGANAME,
+FMO_ID = pa.FMOID,
+FMO = pa.FMONAME,
+ToplineID = pa.TopLineID,
+Topline = pa.TopLine,
+ToplineType = pa.TopLineType,
+Channel_ORG = pa.Channel
+WHERE AgentID = pa.EH_Agent_Id
+AND AppSource = 'AZ SF'
+;
+
+DROP TABLE #azh
+;
+
+-- Create wonky AZ AgentIDs Volatile Table
+-- DROP TABLE #wonky;
+CREATE VOLATILE TABLE #wonky
+(
+AZAgentID VARCHAR(50),
+Agent VARCHAR(60),
+Agent_Type VARCHAR(50),
+External_Agent_Type VARCHAR(50),
+GAID VARCHAR(50),
+GANAME VARCHAR(60),
+MGAID VARCHAR(50),
+MGANAME VARCHAR(60),
+SGAID VARCHAR(50),
+SGANAME VARCHAR(60),
+FMOID VARCHAR(50),
+FMONAME VARCHAR(60),
+Channel VARCHAR(50)
+)
+ON COMMIT PRESERVE ROWS;
+
+INSERT INTO #wonky
+VALUES (
+'11111111',
+'Pending Broker',
+'N/A',
+'N/A',
+'G440002',
+'DIRECTLY CONTRACTED AGENT',
+NULL, --MGAID
+NULL, --MGA
+NULL, --SGAID
+NULL, --SGA
+'G210112',
+'DIRECTLY CONTRACTED AGENT',
+'Broker'
+);
+INSERT INTO #wonky
+VALUES (
+'20000000',
+'Cigna Internal',
+'N/A',
+'N/A',
+'G440002',
+'DIRECTLY CONTRACTED AGENT',
+NULL, --MGAID
+NULL, --MGA
+NULL, --SGAID
+NULL, --SGA
+'G210112',
+'DIRECTLY CONTRACTED AGENT',
+'Broker'
+);
+INSERT INTO #wonky
+VALUES (
+'33333333',
+'BRC New Leads',
+'N/A',
+'N/A',
+'G390001',
+'EMPLOYED',
+NULL, --MGAID
+NULL, --MGA
+NULL, --SGAID
+NULL, --SGA
+'G210111',
+'EMPLOYED',
+'DTC - Field'
+);
+INSERT INTO #wonky
+VALUES (
+'99999999',
+'Broker Unassigned',
+'N/A',
+'N/A',
+'G390001',
+'EMPLOYED',
+NULL, --MGAID
+NULL, --MGA
+NULL, --SGAID
+NULL, --SGA
+'G210111',
+'EMPLOYED',
+'DTC - Field'
+);
+
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f, #wonky pa
+SET AgentType = pa.Agent_Type,
+AgentSubType = pa.External_Agent_Type,
+GA_ID = pa.GAID,
+GA = pa.GANAME,
+MGA_ID = pa.MGAID,
+MGA = pa.MGANAME,
+SGA_ID = pa.SGAID,
+SGA = pa.SGANAME,
+FMO_ID = pa.FMOID,
+FMO = pa.FMONAME,
+Channel_ORG = pa.Channel
+WHERE AgentID = pa.AZAgentID
+AND AppSource = 'AZ SF'
+;
+
+DROP TABLE #wonky;
+
+-- Update MBI from SubscriberID
+CREATE MULTISET VOLATILE TABLE #axmbi AS
+(
+SELECT DISTINCT
+LEFT(TRIM(SDO_GBSA_ENRLMT_MEDCR.MemberID),9) AS subscriber_id,
+SDO_GBSA_ENRLMT_MEDCR.MedicareID as medicare_id,
+SDO_GBSA_ENRLMT_MEDCR.OperationalMarket
+FROM REPORTING_V.SDO_GBSA_ENRLMT_MEDCR SDO_GBSA_ENRLMT_MEDCR
+WHERE (SDO_GBSA_ENRLMT_MEDCR.OperationalMarket = 'AZ')
+) WITH DATA PRIMARY INDEX (subscriber_id) ON COMMIT PRESERVE ROWS ;
+
+COLLECT STATS COLUMN (subscriber_id) ON #axmbi;
+
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+FROM #axmbi
+SET MedicareID = #axmbi.medicare_id
+WHERE ((SubscriberID = #axmbi.subscriber_id)
+AND (MedicareID IS NULL)
+AND (AppSource = 'AZ SF'))
+;
+
+DROP TABLE #axmbi;
+
+
+-- LEON OSS Data
+-- Geo and Market Info
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Region_ORG = 'South East',
+Market_ORG = 'FL',
+MicroMarket_ORG = 'South Florida - Leon',
+County = 'Miami-Dade',
+State = 'FL'
+WHERE AppSource = 'LEON OSS'
+;
+
+-- Plan info NOTE: Update as required for future Eff Years
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Contract = 'H5410',
+PBP = '001',
+Segment = '000',
+Plan_Name = CASE WHEN EXTRACT(YEAR FROM Effective) >= 2021 THEN 'Leon Medicare (HMO)' --
+ELSE 'Leon Medical Centers Health Plans - Leon Cares (HMO)' END,
+Plan = CASE WHEN EXTRACT(YEAR FROM Effective) >= 2021 THEN 'Leon Medicare'
+ELSE 'Leon Cares' END,
+Product = 'HMO',
+SNP = 'Non-SNP'
+WHERE AppSource = 'LEON OSS'
+;
+
+-- Fix a wonky id 466448 YILIAN GONZALEZ
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET AgentID = 'C466448'
+WHERE AgentID = '466448' AND AppSource = 'LEON OSS'
+;
+
+-- Employed AgentIDs
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f, BUSINESS_OPS_CORE_V.LU_LEON_AGENT lu
+SET AgentID = lu.Agent_ID
+WHERE Agent = Full_Name
+AND AppSource = 'LEON OSS'
+AND AgentID IS NULL
+;
+
+-- Add LEON Hierarchy from SF
+CREATE MULTISET VOLATILE TABLE #lusf AS
+(
+SELECT DISTINCT
+lusf.Agent_ID,
+lusf.Agent_Type,
+lusf.Agent_SubType,
+lusf.Writing_Agency_ID,
+lusf.Writing_Agency,
+lusf.Writing_Agency_Role,
+Writing_Agency_Start_Date,
+Writing_Agency_End_Date,
+lusf.MGA_ID,
+lusf.MGA,
+lusf.SGA_ID,
+lusf.SGA,
+lusf.FMO_ID,
+lusf.FMO,
+lusf.Topline_ID,
+lusf.Topline,
+lusf.Topline_Role
+FROM BUSINESS_OPS_CORE_V.LU_AGENTS_SF_ALL lusf
+) WITH DATA PRIMARY INDEX (Agent_ID, Agent_Type, Agent_SubType, Writing_Agency_Start_Date, Writing_Agency_End_Date) ON COMMIT PRESERVE ROWS ;
+
+COLLECT STATS COLUMN (Agent_ID, Agent_Type, Agent_SubType, Writing_Agency_Start_Date, Writing_Agency_End_Date) ON #lusf;
+
+-- Update LEON agents from SF Lookup
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f, #lusf lu
+SET AgentType = lu.Agent_Type,
+AgentSubType = lu.Agent_SubType,
+GA_ID = CASE WHEN lu.Writing_Agency_Role LIKE 'GA' THEN lu.Writing_Agency_ID END,
+GA = CASE WHEN lu.Writing_Agency_Role LIKE 'GA' THEN lu.Writing_Agency END,
+MGA_ID = lu.MGA_ID,
+MGA = lu.MGA,
+SGA_ID = lu.SGA_ID,
+SGA = lu.SGA,
+FMO_ID = lu.FMO_ID,
+FMO = lu.FMO
+WHERE ((AgentID = lu.Agent_ID)
+AND (Effective BETWEEN lu.Writing_Agency_Start_Date AND lu.Writing_Agency_End_Date)
+AND (AppSource = 'LEON OSS'))
+;
+
+/* Update agents from SF Lookup w/out agreement */
+
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f,
+(
+SELECT DISTINCT
+Agent_ID,
+lusf.Agent_Type,
+lusf.Agent_SubType
+FROM #lusf lusf
+) lu
+SET AgentType = lu.Agent_Type,
+AgentSubType = lu.Agent_SubType
+WHERE ((AgentID = lu.Agent_ID)
+AND (AgentType IS NULL)
+AND (AppSource = 'LEON OSS'))
+;
+
+DROP TABLE #lusf
+;
+
+
+-- HS SF Data
+-- Product info
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET PLAN =
+CASE WHEN INDEX(Plan_Name,'Achieve') > 0 THEN 'Achieve'
+ELSE CASE WHEN INDEX(Plan_Name,'Advantage') > 0 THEN 'Advantage'
+ELSE CASE WHEN INDEX(Plan_Name,'Alliance') > 0 THEN 'Alliance'
+ELSE CASE WHEN INDEX(Plan_Name,'Fundamental') > 0 THEN 'Fundamental'
+ELSE CASE WHEN INDEX(Plan_Name,'Leon') > 0 THEN 'Leon Cares'
+ELSE CASE WHEN INDEX(Plan_Name,'PreferredPlus') > 0 THEN 'PreferredPlus'
+ELSE CASE WHEN INDEX(Plan_Name,'Preferred') > 0 THEN 'Preferred'
+ELSE CASE WHEN INDEX(Plan_Name,'Premier') > 0 THEN 'Premier'
+ELSE CASE WHEN INDEX(Plan_Name,'PreventiveCare') > 0 THEN 'PreventiveCare'
+ELSE CASE WHEN INDEX(Plan_Name,'Primary') > 0 THEN 'Primary'
+ELSE CASE WHEN INDEX(Plan_Name,'True Choice') > 0 THEN 'True Choice'
+ELSE CASE WHEN INDEX(Plan_Name,'TotalCare') > 0 THEN 'TotalCare'
+ELSE CASE WHEN INDEX(Plan_Name,'Traditions') > 0 THEN 'Traditions'
+ELSE Plan_Name
+END END END END END END END END END END END END END
+WHERE AppSource = 'HS SF'
+;
+
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Product = CASE WHEN INSTR(Plan_Name,'HMO') > 0 THEN 'HMO'
+ELSE CASE WHEN INSTR(Plan_Name, 'PPO') > 0 THEN 'PPO'
+ELSE NULL END END
+WHERE AppSource = 'HS SF'
+;
+
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET SNP =
+CASE WHEN INSTR(Plan_Name,'SNP') > 0 THEN 'SNP' ELSE
+CASE WHEN Plan_Name IS NULL THEN NULL
+ELSE 'Non-SNP' END END
+WHERE AppSource = 'HS SF'
+;
+
+-- Establish Topline ID and type until hierarchy fixed....
+-- Topline_ID
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET ToplineID =
+CASE WHEN Topline = FMO THEN FMO_ID
+ELSE CASE WHEN Topline = SGA THEN SGA_ID
+ELSE CASE WHEN Topline = MGA THEN MGA_ID
+ELSE CASE WHEN Topline = GA THEN GA_ID
+ELSE NULL END END END END,
+-- ToplineType
+ToplineType =
+CASE WHEN Topline = FMO THEN 'FMO'
+ELSE CASE WHEN Topline = SGA THEN 'SGA'
+ELSE CASE WHEN Topline = MGA THEN 'MGA'
+ELSE CASE WHEN Topline = GA THEN 'GA'
+ELSE NULL END END END END
+WHERE (LENGTH(COALESCE(Topline, 'null')) > 4
+AND (AppSource = 'HS SF'))
+;
+
+-- Global fixes/updates
+-- App Category
+UPDATE f
+FROM REPORTING_T.SUBMITTED_APPS_FINAL f, BUSINESS_OPS_CORE_V.LU_APPLICATION_STATUS lu
+SET AppCategory = lu.App_Category
+WHERE AppStatus = lu.App_Status
+AND AppSource = lu.App_Source
+And AppSource IN ('LEON OSS',' SF HS')
+;
+
+-- Establish Writing Agency and type
+--Writing_ID
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Writing_ID =
+CASE WHEN GA_ID > ' ' THEN GA_ID
+ELSE CASE WHEN MGA_ID > ' ' THEN MGA_ID
+ELSE CASE WHEN SGA_ID > ' ' THEN SGA_ID
+ELSE CASE WHEN FMO_ID > ' ' THEN FMO_ID
+END END END END
+--WHERE AppSource IN ('LEON OSS',' SF HS')
+;
+
+--Writing
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Writing =
+CASE WHEN GA_ID > ' ' THEN GA
+ELSE CASE WHEN MGA_ID > ' ' THEN MGA
+ELSE CASE WHEN SGA_ID > ' ' THEN SGA
+ELSE CASE WHEN FMO_ID > ' ' THEN FMO
+END END END END
+--WHERE AppSource IN ('LEON OSS',' SF HS')
+;
+
+--Writing Type
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET WritingType =
+CASE WHEN GA_ID > ' ' THEN 'GA'
+ELSE CASE WHEN MGA_ID > ' ' THEN 'MGA'
+ELSE CASE WHEN SGA_ID > ' ' THEN 'SGA'
+ELSE CASE WHEN FMO_ID > ' ' THEN 'FMO'
+END END END END
+--WHERE AppSource IN ('LEON OSS',' SF HS')
+;
+
+-- Update Channel
+-- Use SF directly
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Channel = Channel_ORG
+WHERE (AppSource = 'HS SF')
+;
+
+-- For Rest - generate SF from TL
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Channel =
+CASE WHEN AgentID = 'A210675' THEN 'CMS Online' -- CMS Online Enrololment
+ELSE CASE WHEN AgentID = 'A210652' THEN 'Cigna Online' -- Cigna Online Enrololment
+ELSE CASE WHEN AgentID = 'A210652' THEN 'House - No Agent' -- Cigna Online Enrololment
+ELSE CASE WHEN AgentID = 'A454638' THEN 'House - Illegible' -- Cigna Online Enrololment
+ELSE CASE WHEN ToplineID IN (
+'S489250', -- ALORICA *NOT AN AGENCY, SEE NOTES*
+'S497820' -- HPONE *VENDOR, NOT AN AGENCY*
+) THEN 'DTC - Telesales'
+ELSE CASE WHEN ToplineID IN (
+'S435449', -- CIGNA-HEALTHSPRING EMPLOYEE-FMO
+'S435450', -- CIGNA-HEALTHSPRING SEASONAL-FMO
+'G210111' -- Employed
+) THEN
+CASE WHEN AgentSubType LIKE '%field%' THEN 'DTC - Field'
+ELSE CASE WHEN AgentSubType LIKE '%tele%' THEN 'DTC - Telesales'
+ELSE 'DTC - Undetermined'
+END END
+ELSE CASE WHEN LENGTH(COALESCE(ToplineID,'null')) > 4 THEN 'Broker'
+ELSE 'House'
+END END END END END END END
+WHERE -- Appsource <> 'HS SF'
+(AppSource = 'LEON OSS')
+;
+
+-- Bring over demographics as is from source data and derive Region
+-- Set Market
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Market = Market_ORG,
+Micromarket = Micromarket_ORG
+--WHERE AppSource IN ('LEON OSS',' SF HS')
+;
+
+-- Set Region
+UPDATE REPORTING_T.SUBMITTED_APPS_FINAL
+SET Region =
+CASE WHEN LENGTH(COALESCE(Market,'N')) > 1 THEN
+CASE WHEN Market LIKE 'AL' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'AZ' THEN 'West'
+ELSE CASE WHEN Market LIKE 'CO' THEN 'West'
+ELSE CASE WHEN Market LIKE 'CF' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'CR' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'FL' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'GA' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'IL' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'KC' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'LEON' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'MA' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'MAPA' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'NM' THEN 'West'
+ELSE CASE WHEN Market LIKE 'OH' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'OK' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'OR' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'PA' THEN 'North East'
+ELSE CASE WHEN Market LIKE 'SFL' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'TN' THEN 'South East'
+ELSE CASE WHEN Market LIKE 'TX' THEN 'West'
+ELSE CASE WHEN Market LIKE 'UT' THEN 'West'
+END END END END END END END END END END END END END END END END END END END END END END
+--WHERE AppSource IN ('LEON OSS',' SF HS')
+;
+
+COLLECT STATS COLUMN (ID) ON REPORTING_T.SUBMITTED_APPS_FINAL;
+
+--------------------------------------------------------adding the updated table logic----------------------------------------------------------------
+--DELETE FROM REPORTINGGrowthRpt.Submitted_Apps_Updated2
+--WHERE ID = 'ID' AND MedicareID = 'MedicareID' AND MemberID = 'MemberID' AND SubscriberID = 'SubscriberID' AND DOB_KEY = DOB_KEY
+--AND LeadID = 'LeadID' AND FirstName = 'FirstName' AND LastName = 'LastName' AND Region_ORG = 'Region_ORG' AND Market_ORG = 'Market_ORG'
+--AND Micromarket_ORG = 'Micromarket_ORG' AND Channel_ORG = 'Channel_ORG' AND County = 'County' AND State = 'State' AND ZIP = 'ZIP'
+--AND AppID = 'AppID' AND Signed = Sign
+ed AND Received = Received AND Entered = Entered AND Effective = Effective
+--AND AppStatus = 'AppStatus' AND AppEnrollmentSource = 'AppEnrollmentSource' AND OriginalDriver = 'OriginalDriver'
+--AND CurrentDriver = 'CurrentDriver' AND CurrentCampaign = 'CurrentCampaign' AND CurrentCampaignMod = CurrentCampaignMod
+--AND OriginalCampaign = 'OriginalCampaign' AND OriginalCampaignMod = OriginalCampaignMod AND AppCampaign = 'AppCampaign'
+--AND AppParentCampaign = 'AppParentCampaign' AND Contract = 'Contract' AND PBP = 'PBP' AND Segment = 'Segment' AND Plan_Name = 'Plan_Name'
+--AND Plan = 'Plan' AND Product = 'Product' AND SNP = 'SNP' AND AgentID = 'AgentID' AND Agent = 'Agent' AND AgentType = 'AgentType'
+--AND AgentSubType = 'AgentSubType' AND GA_ID = 'GA_ID' AND GA = 'GA' AND MGA_ID = 'MGA_ID' AND MGA = 'MGA' AND SGA_ID = 'SGA_ID' AND SGA = 'SGA'
+--AND FMO_ID = 'FMO_ID' AND FMO = 'FMO' AND toplineid = 'toplineid' AND Topline = 'Topline' AND ToplineType = 'ToplineType' AND AppSource = 'AppSource'
+--AND LOAD_DTTS = LOAD_DTTS AND AppCategory = 'AppCategory' AND Writing_ID = 'Writing_ID' AND Writing = 'Writing' AND WritingType = 'WritingType' AND Region = 'Region'
+--AND Market = 'Market' AND Submarket = 'Submarket' AND Micromarket = 'Micromarket' AND Channel = 'Channel' AND SubChannel = 'SubChannel' AND EFFECTIVEDATEKEY = 'EFFECTIVEDATEKEY' ;
+--
+
+delete FROM REPORTING_T.SUBMITTED_APPS_UPDATED;
+
+insert into REPORTING_T.SUBMITTED_APPS_UPDATED
+
+select id, MedicareID, MemberID, SubscriberID, DOB_KEY, LeadID, FirstName, LastName, Region_ORG, Market_ORG, Micromarket_ORG
+, Channel_ORG, County, State, ZIP, AppID, Signed, Received, Entered, Effective, AppStatus, AppEnrollmentSource
+, OriginalDriver, CurrentDriver, CurrentCampaign, CurrentCampaignMod, OriginalCampaign, OriginalCampaignMod, AppCampaign
+, AppParentCampaign, Contract, PBP, Segment, Plan_Name, Plan, Product, SNP, coalesce(newagent,null) as AgentID
+, agent_name as Agent
+, null as AgentType, null as AgentSubType,
+GA_ID, ga_name as GA, MGA_ID,mga_name as MGA, SGA_ID, sga_name as SGA, FMO_ID
+, fmo_name FMO,topline_id as toplineid , Topline_Name Topline ,TOPLINE_ROLE as ToplineType, AppSource, LOAD_DTTS
+, AppCategory, coalesce(Writing_ID,'Unassigned') as Writing_ID, coalesce(Writing,'Unassigned') as Writing, coalesce(WritingType,'Unassigned') as WritingType,
+
+coalesce(Region,'Unassigned') Region,coalesce(Market,'Unassigned') Market, coalesce(Submarket,'Unassigned') Submarket, 'Unassigned' Micromarket,
+coalesce(Region_Code,'U') Region_Code,coalesce(Market_Code,'U') Market_Code,coalesce(Submarket_Code,'U') Submarket_Code
+, 'U' Micromarket_Code,
+
+coalesce(HIERARCHY_TYPE_D,'Unassigned') as Channel
+, coalesce(HIERARCHY_SUB_TYPE_D,'Unassigned') as Sub_Channel,EFFECTIVEDATEKEY
+-- into REPORTINGGrowthRpt.Submitted_Apps_Updated2
+from (SELECT id, MedicareID, app.MemberID, SubscriberID, DOB_KEY, LeadID, FirstName, LastName--, ID
+, Region_ORG, Market_ORG, Micromarket_ORG, Channel_ORG, County, app.State, ZIP, AppID, Signed
+, Received, Entered, Effective, AppCategory, AppStatus, AppEnrollmentSource, OriginalDriver
+, CurrentDriver, CurrentCampaign, CurrentCampaignMod, OriginalCampaign, OriginalCampaignMod, AppCampaign
+, AppParentCampaign, Contract, PBP, Segment, Plan_Name, Plan, Product, SNP, app.AgentID as orgid,MbrAgt.AgentID, HIERARCHY_SUB_TYPE_D, HIERARCHY_TYPE_D,
+case when app.agentid is not null then app.agentid else mbragt.agentid end as NewAgent,
+Agent, AgentType, AgentSubType, agentinfo.GA_ID
+, Writing_ID, Writing, WritingType--, GA_ID, GA, MGA_ID, MGA, SGA_ID, SGA, FMO_ID, FMO
+
+--, ToplineType--, app.Submarket
+
+--, agentinfo.ga_name, agentinfo.MGA_ID, agentinfo.mga_name, agentinfo.SGA_ID, agentinfo.sga_name
+--, agentinfo.FMO_ID, agentinfo.fmo_name
+, agentinfo.Topline_ID, agentinfo.Topline_Name, app.ToplineID as Old_Top_ID, Topline as Old_Topline, LUMkt.Region
+, LUMkt.Market, app.Market old_Market, app.Region as Old_Region,lumkt.submarket,RPT_MICROMARKET__C__NAME Micromarket--need to be replaced with the plan micromarket
+, lumkt.stateabbr as Plan_State, lumkt.stateabbr as Plan_State_Abb, null as Plan_County, app.Channel
+, AppSource, LOAD_DTTS , agent_name, GA_ROLE, GA_NAME, GA_PDCR_CD, GA_SIRCON_AGENT_ID, GA_AGREEMENT_EFFECTIVE_DATE
+, GA_AGREEMENT_END_DATE, MGA_ROLE, MGA_NAME, MGA_PDCR_CD, MGA_SIRCON_AGENT_ID, MGA_AGREEMENT_EFFECTIVE_DATE, MGA_AGREEMENT_END_DATE,agentinfo.MGA_ID
+, SGA_ROLE, SGA_NAME, agentinfo.SGA_ID, SGA_PDCR_CD, SGA_SIRCON_AGENT_ID, SGA_AGREEMENT_EFFECTIVE_DATE, SGA_AGREEMENT_END_DATE, FMO_ROLE, FMO_NAME, agentinfo.FMO_ID
+, FMO_PDCR_CD, FMO_SIRCON_AGENT_ID, FMO_AGREEMENT_EFFECTIVE_DATE, FMO_AGREEMENT_END_DATE,TOPLINE_ROLE,EFFECTIVEDATEKEY, region_code, market_code,submarket_code
+FROM ( select id, MedicareID, MemberID, SubscriberID, DOB_KEY, LeadID, FirstName, LastName, Region_ORG, Market_ORG, Micromarket_ORG
+, Channel_ORG, County, State, ZIP, AppID, Signed, Received, Entered, Effective, AppCategory, AppStatus, AppEnrollmentSource
+, OriginalDriver, CurrentDriver, CurrentCampaign, CurrentCampaignMod, OriginalCampaign, OriginalCampaignMod, AppCampaign, AppParentCampaign
+, Contract, PBP, Segment, Plan_Name, Plan, Product, SNP, AgentID, Agent, AgentType, AgentSubType, Writing_ID, Writing, WritingType, GA_ID, GA
+, MGA_ID, MGA, SGA_ID, SGA, FMO_ID, FMO, ToplineID, Topline, ToplineType, AppSource, LOAD_DTTS ,Region, Market, Submarket, Micromarket
+, Channel,EFFECTIVEDATEKEY
+--, concat(medicareid,contract,pbp,segment,appid) as ID
+---ERS updated to new plan doc 09182021
+from REPORTING_V.SUBMITTED_APPS_FINAL) app left join
+(select distinct rpt_region_name region, rpt_market_name market, Submarket, contract_id contractid,plan_id pbpcode
+, Type_of_Medicare_Health_Plan as "plan name",null as "plan type", RPT_MICROMARKET__C__NAME,RPT_MICROMARKET__C__CODE
+, state_code stateabbr , rpt_region_code region_code, rpt_market_code market_code, null submarket_code, county_name
+--select *
+from BUSINESS_OPS_CORE_V.LU_PLAN_HIST) LUMkt
+on contractid = contract and pbpcode =pbp and app.State = LUMkt.stateabbr
+and app.State = LUMkt.stateabbr and county = county_name
+
+left join REPORTING_V.LU_MBR_AGT MbrAgt on MbrAgt.MemberID = app.MemberID and MbrAgt.EffDate = app.effective-- and MbrAgt.Source=app.AppSource
+left join REPORTING_V.AGENT_AGREEMENT_HISTORY as AgentInfo
+on AgentInfo.AGENT_ID = newagent and coalesce(app.signed, app.received, app.entered, app.effective) between AgentInfo.AGREEMENT_EFFECTIVE_DATE and AgentInfo.AGREEMENT_END_DATE
+--where app.agentid is not null and MbrAgt.AgentID is not null
+--where app.topline_id <>toplineid-- or LUMkt.Market<>app.market
+)
+as UpdatedApps;
+
+COLLECT STATS COLUMN (ID) ON REPORTING_T.SUBMITTED_APPS_UPDATED;
+
+CALL HSPROCS.ABC_HEADER_LOAD('PROC_FOR_SUBMITTED_APPS_FINAL_LOAD','',:PROC_MSG);
+CALL HSPROCS.ABC_DETAIL_LOAD_TD2TD('PROC_FOR_SUBMITTED_APPS_FINAL_LOAD',1,'TGT',:PROC_MSG);
+
+SET PROC_MSG ='PROC_FOR_SUBMITTED_APPS_FINAL EXECUTED SUCCESSFULLY';
+
+END;
+
+------------
+GR_MEMBER
+---------
+ColumnName                  |
+----------------------------+
+EventYear                   |
+Enrollment_Transaction_Date |
+TRR_Transaction_Date2       |
+SignatureDate               |
+DeathDate                   |
+CustomerDuration            |
+CustomerDurationBand        |
+MemberID                    |
+MedicareID                  |
+MedicaidID                  |
+MemberLast                  |
+MemberMiddle                |
+DateofBirth                 |
+Age                         |
+Gender                      |
+CMSDualStatusCode           |
+CMSDualStatusCodeDesc       |
+MediMediFlag                |
+ESRDFlag                    |
+WorkingAgeFlag              |
+InstFlag                    |
+LISFlag                     |
+HospiceMMRFlag              |
+ESRDMMRFlag                 |
+RiskScore                   |
+LanguageDesc                |
+MemberLatitude              |
+MemberLongitude             |
+RegionCode                  |
+HHVIDesc                    |
+MemberCounty                |
+MemberState                 |
+SSA_MemberState_MemberCounty|
+MMRCounty                   |
+MMRState                    |
+SSA_MMRState_MMRCounty      |
+PCPID                       |
+PCPName                     |
+PCPNPI                      |
+PCPTIN                      |
+ProviderLatitude            |
+ProviderLongitude           |
+AttributedPCPIndicator      |
+P4QFlag                     |
+PCPCounty                   |
+PCPState                    |
+SSA_PCPState_PCPCounty      |
+Report_SSA                  |
+Region                      |
+Market                      |
+SubMarket                   |
+Report_State_County         |
+ExpansionYear               |
+ExpansionType               |
+SARIndicator                |
+HCODE                       |
+PBP                         |
+ContractIDPBPSegment        |
+ProductType                 |
+PlanType                    |
+SNPType                     |
+PlanName                    |
+PlanTypeReporting           |
+Group_MA_Flag               |
+Monthly_Consolidated_Premium|
+PremiumBand                 |
+EngagementCode              |
+Engagement                  |
+ManagingEntity              |
+ReportingPod                |
+PodCode                     |
+PodName                     |
+GroupID                     |
+EGWPIndicator               |
+BusinessName                |
+EMPLR_GRP_ID                |
+EMPLR_GRP_ACCT_NUM          |
+EMPLR_GRP_NM                |
+EMPLR_GRP_BEN_OPT_ID        |
+EMPLR_GRP_BEN_OPT_NM        |
+EMPLR_GRP_BRNCH_ID          |
+EMPLR_GRP_BRNCH_NM          |
+EMPLR_GRP_EFF_DT            |
+EMPLR_GRP_TERM_DT           |
+PRODT_SUB_TY                |
+agent_id                    |
+Agent_Name                  |
+AGENT_NPN                   |
+TOPLINE_NAME                |
+TOPLINE_ROLE                |
+TOPLINE_ID                  |
+Channel                     |
+Subchannel                  |
+Sales_Channel               |
+DIRECT_UPLINE_ROLE          |
+DIRECT_UPLINE_NAME          |
+AFMO_NAME                   |
+NFMO_NAME                   |
+RFMO_NAME                   |
+FMO_NAME                    |
+SGA2_NAME                   |
+SGA_NAME                    |
+MGA_NAME                    |
+GA_NAME                     |
+AFMO_ID                     |
+NFMO_ID                     |
+RFMO_ID                     |
+FMO_ID                      |
+SGA2_ID                     |
+SGA_ID                      |
+MGA_ID                      |
+GA_ID                       |
+EFFDATE                     |
+TRR_Prior_HCode_PBP         |
+TRR_Prior_HCode             |
+TRR_Prior_PBP               |
+TRR_Prior_ParentOrganization|
+TRR_Prior_PlanTypeReporting |
+TRR_TransactionReplyCode    |
+TRR_TRCShortName            |
+TRR_RecType                 |
+DECode                      |
+DEType                      |
+DEDesc                      |
+DECategory                  |
+CompetitorContract          |
+CompetitorName              |
+CompetitorPlanType          |
+NewSaleFlag                 |
+PlanChangeFlag              |
+PlanChangeType              |
+DisenrollmentFlag           |
+RapidDisenrollmentFlag      |
+BeginningMembershipFlag     |
+EndingMembershipFlag        |
+LastUpdated                 |
+SourceDataKey               |
+SourceMemberKey             |
+TERMDATE                    |
+MicroMarket                 |
+HospiceFlag                 |
+IndividualEnterpriseID      |
+TRR_Transaction_Date        |
+ContinuousEffectiveDate     |
+ReportBeginDate             |
+ReportDate                  |
+TRR_ElectionType            |
+SegmentID                   |
+MemberZip                   |
+MemberFirst                 |
+EffectiveYear               |
+EventDate                   |
+OriginalStartDate           |
+ReportEndDate               |
+
+----------------------------------
+SUBMITTED_APPS_FINAL
+ColumnName         |
+-------------------+
+LeadID             |
+Region_ORG         |
+Market_ORG         |
+Micromarket_ORG    |
+County             |
+State              |
+ZIP                |
+Signed             |
+Received           |
+Entered            |
+Effective          |
+AppEnrollmentSource|
+OriginalDriver     |
+CurrentDriver      |
+CurrentCampaign    |
+CurrentCampaignMod |
+OriginalCampaign   |
+OriginalCampaignMod|
+AppCampaign        |
+AppParentCampaign  |
+Contract           |
+Segment            |
+Plan_Name          |
+Plan               |
+Product            |
+SNP                |
+Agent              |
+AgentType          |
+AgentSubType       |
+GA_ID              |
+GA                 |
+MGA_ID             |
+MGA                |
+SGA_ID             |
+SGA                |
+FMO_ID             |
+FMO                |
+toplineid          |
+Topline            |
+ToplineType        |
+AppSource          |
+LOAD_DTTS          |
+AppCategory        |
+Writing_ID         |
+Writing            |
+WritingType        |
+Region             |
+Market             |
+Submarket          |
+Micromarket        |
+Channel            |
+EFFECTIVEDATEKEY   |
+PBP                |
+AppID              |
+LastName           |
+SubscriberID       |
+MedicareID         |
+ID                 |
+AgentID            |
+AppStatus          |
+Channel_ORG        |
+FirstName          |
+DOB_KEY            |
+MemberID           |
