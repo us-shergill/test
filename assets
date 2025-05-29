@@ -6253,4 +6253,63 @@ ReportBeginDate
 MEMID                   
 ProductTypeCode         
 ContinuousEffectiveDate 
-Product                 
+Product   
+
+
+------------------
+ColumnName   SUBMITTED_APPS_ORG      |
+-------------------+
+FirstName          |
+Market_ORG         |
+Micromarket_ORG    |
+Channel_ORG        |
+State              |
+ZIP                |
+AppID              |
+Received           |
+Entered            |
+Effective          |
+AppStatus          |
+OriginalDriver     |
+CurrentDriver      |
+CurrentCampaign    |
+CurrentCampaignMod |
+OriginalCampaign   |
+OriginalCampaignMod|
+AppCampaign        |
+AppParentCampaign  |
+Contract           |
+PBP                |
+Plan_Name          |
+Plan               |
+Product            |
+SNP                |
+AgentID            |
+AgentType          |
+AgentSubType       |
+GA_ID              |
+GA                 |
+MGA_ID             |
+MGA                |
+SGA_ID             |
+SGA                |
+FMO_ID             |
+FMO                |
+ToplineID          |
+Topline            |
+ToplineType        |
+AppSource          |
+LOAD_DTTS          |
+EFFECTIVEDATEKEY   |
+Segment            |
+Signed             |
+Region_ORG         |
+DOB_KEY            |
+MemberID           |
+MedicareID         |
+Agent              |
+AppEnrollmentSource|
+County             |
+LastName           |
+LeadID             |
+SubscriberID       |
