@@ -6228,3 +6228,29 @@ Channel_ORG        |
 FirstName          |
 DOB_KEY            |
 MemberID           |
+-----------------------
+ColumnName  GR MEMBER VOID            
+------------------------
+Market                  
+HealthPlanIntelligentKey
+MemberKey               
+SourceMemberKey         
+CoverageTypeCode        
+PayorName               
+EnrollmentStartDate     
+EnrollmentEndDate       
+CoverageEndDate         
+EnrollmentSignatureDate 
+ENROLLID                
+SIGNATUREDATE           
+CREATEDATE              
+LASTUPDATE              
+CoverageStartDate       
+Contract_PBP_Segment    
+VoidDate                
+MedicareID              
+ReportBeginDate         
+MEMID                   
+ProductTypeCode         
+ContinuousEffectiveDate 
+Product                 
