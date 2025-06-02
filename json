@@ -1,365 +1,319 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as glob from 'glob';
-import * as os from 'os';
-import { readCsv } from './fileManager';
-const csv = require('csvtojson');
-const Exceljs = require('exceljs');
-
-
-export async function combineAndExport(fullPathOut) {
-    const grps = await getFilePathGroups(fullPathOut);
-    let flatFilePath
-    // for each zip grouping (ie for each zipcode) files are combined and written as one flat csv file per zip 
-    for (const g of Object.keys(grps)) {
-        let flattenedZipDataObjects = await flattenFileGroup(grps[g])
-        flatFilePath = await writeToFile(g, flattenedZipDataObjects)
-        let fileName = g
-        let zip = fileName.split("_")[0]
-        await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects)
-    }
-}
-export function testHeaders(flattenedZipDataObjects) {
-    const lengths = flattenedZipDataObjects.map(obj => obj.length).flat()
-    const distinctLengths = new Set(lengths)
-    if (distinctLengths.size !== 1) {
-        throw 'Unexpected plans and pharmacy counts found. Some drugs may have missing drug costs for a plan or pharmacy.';
-    }
-    const distinctHeaders = new Set()
-    flattenedZipDataObjects.forEach(obj => distinctHeaders.add(obj.map(row => row[0]).join(',')))
-    if (distinctHeaders.size !== 1) {
-        throw 'Unexpected set of headers found. Some drugs may have missing drug costs for a plan or pharmacy.';
-    }
-}
-export async function writeToFile(fileName, flattenedZipDataObjects) {
-    // TODO file name
-    const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`)
-    console.log(`Working on file: ${fileName}`)
-    try {fs.unlinkSync(reportFile) } catch (e) { }
-    
-    // testHeaders(flattenedZipDataObjects)
-
-    let header = `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`
-    let lines = [header]
-    for (const line of flattenedZipDataObjects){
-        let fullLine = line.map(row => {
-            // remove comma from subelement to prevent them from accidentally being used as a delimiter
-            return row[1].toString().replace(/,/g, '')                                         
-        }).join(',')
-            
-        lines.push(`${fullLine}\n`)
-    }
-    lines.forEach(ln => {
-        fs.appendFileSync(reportFile, ln)
-    })
-    return reportFile
-}
-// each zipcode may have multiple seperate files, this function creates a dictionary that groups the filepaths of those sep files by zip to be iterated on later
-export async function getFilePathGroups(fullPathOut) {
-    let pattern = `${fullPathOut}/*.csv`
-    const csvDataFiles = glob.sync(pattern);
-
-    let testStr
-    let parts = [];
-    let groupGlobs = [];
-    csvDataFiles.forEach(nm => {
-        parts = path.basename(nm).split('_')        
-        // if no indices provided, split on _ will give something like esrd.csv for parts[1], so replace the .csv part
-        testStr = `${parts[0]}`
-        if (groupGlobs.indexOf(testStr) < 0) {
-            groupGlobs.push(testStr)
-        }
-    })
-    let groupedFiles = {}
-    groupGlobs.forEach(glb => {
-        pattern = `${fullPathOut}/${glb}*.csv`;
-        // sort and rank of the drug output
-        groupedFiles[glb] = glob.sync(pattern).sort((a, b) => a.localeCompare(b, undefined,{ numeric: true }));
-    })
-
-    console.log("Grouped Files Detected:")
-    console.log(groupedFiles);
-    return groupedFiles   
+Getting current page
+%s[8:42:39 AM] PageManager                 |  Initializing browser
+%s[8:42:39 AM] PageManager                 |  launching new puppeteer
+ErrorEvent {
+  [Symbol(kTarget)]: WebSocket {
+    _events: [Object: null prototype] { open: [Function], error: [Function] },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    _binaryType: 'nodebuffer',
+    _closeCode: 1006,
+    _closeFrameReceived: false,
+    _closeFrameSent: false,
+    _closeMessage: <Buffer >,
+    _closeTimer: null,
+    _extensions: {},
+    _paused: false,
+    _protocol: '',
+    _readyState: 3,
+    _receiver: null,
+    _sender: null,
+    _socket: null,
+    _bufferedAmount: 0,
+    _isServer: false,
+    _redirects: 0,
+    _autoPong: true,
+    _url: 'ws://127.0.0.1:50897/devtools/browser/3c18c6e4-3f05-452d-8806-2bf25c683fe7',
+    _originalIpc: false,
+    _originalSecure: false,
+    _originalHostOrSocketPath: '127.0.0.1:50897',
+    _req: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kType)]: 'error',
+  [Symbol(kError)]: Error: socket hang up
+      at connResetException (node:internal/errors:721:14)
+      at Socket.socketOnEnd (node:_http_client:519:23)
+      at Socket.emit (node:events:526:35)
+      at endReadableNT (node:internal/streams/readable:1408:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+    code: 'ECONNRESET'
+  },
+  [Symbol(kMessage)]: 'socket hang up'
 }
 
-//this function takes the filegroup list for each zip and flattens the file data and combines them and adds some header information
-export async function flattenFileGroup(fileGroupList) {
-    let planIdMap = {}
+> hc-gov-rankings@1.0.0 premain
+> cp -a conf/. bin/conf/ && tsc
 
-    let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList)
-    let flattenedZipData = flattenZipData(zipGroupSortedObjects, planIdMap)
-    return flattenedZipData
-}
-export async function combineAndSortFileGroupData(fileGroupList) {
 
-    let zipData = []
-    for (const fileName of fileGroupList){
-        let fileData = await readCsv(fileName)
-        zipData.push(...fileData)
-    }
-    // Sort by drugCategory, drugName, planId, mail order last
-    zipData.sort(function (a, b) {
-        let exceptions = [ "Mail order pharmacy" ], indexA, indexB;
-        indexA = exceptions.indexOf(a.source);
-        indexB = exceptions.indexOf(b.source);
-        let mail_order_calc = 0;
-        if (indexA === -1 && indexB === -1) {
-            mail_order_calc = a.source.toLowerCase().localeCompare(b.source.toLowerCase()); // regular case
-        } else {
-            mail_order_calc = indexA - indexB // index will be -1 (doesn't occur), 0 or 1
-        }
-        return (
-            a.drugCategory.localeCompare(b.drugCategory) || 
-            // a.drugGroup.localeCompare(b.drugGroup) ||
-            a.brandGenericFlag.localeCompare(b.brandGenericFlag) ||
-            a.rank - b.rank||
-            a.drugName.localeCompare(b.drugName) ||
-            a.planId.localeCompare(b.planId) || 
-            mail_order_calc
-        )
-    });
-    
-    return zipData 
-}
-export function flattenZipData(zipData, planIdMap) {
-    let flattenedZipData = [];
-    zipData.forEach(priceObjct => {
-        let found = flattenedZipData.find(objct => 
-            objct[0][1] == priceObjct.rank &&
-            objct[1][1] == priceObjct.drugCategory &&
-            objct[2][1] == priceObjct.drugName &&
-            objct[3][1] == priceObjct.quantity
-        )
-        if (!!found) {
-            found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`,priceObjct.cost])
-        } else {
-            var flattenedObj = [
-                [`Rank`, priceObjct.rank],
-                ['Drug Category', priceObjct.drugCategory],
-                ['Drug', priceObjct.drugName],
-                ['Quantity', priceObjct.quantity],
-                ['Refill Frequency', '30'],
-                ['Package Option', priceObjct.packageOption],
-                ['Brand or Generic', priceObjct.brandGenericFlag],
-                [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
-            ]
-            flattenedZipData.push(flattenedObj)
-        }
-        planIdMap[`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`] = priceObjct.planId
-    })    
-    return flattenedZipData
+> hc-gov-rankings@1.0.0 main
+> node bin/src/main.js -z 93454 -d market --indx_drg 0:20 --indx_phrm 4:7 --headless false
+
+Range of indexies provided. Scraping drugs at positions 0 to 20
+Range of indexies provided. Scraping pharmacies at positions 4 to 7
+Initializing page for main.ts
+Getting current page
+%s[8:42:44 AM] PageManager                 |  Initializing browser
+%s[8:42:44 AM] PageManager                 |  launching new puppeteer
+ErrorEvent {
+  [Symbol(kTarget)]: WebSocket {
+    _events: [Object: null prototype] { open: [Function], error: [Function] },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    _binaryType: 'nodebuffer',
+    _closeCode: 1006,
+    _closeFrameReceived: false,
+    _closeFrameSent: false,
+    _closeMessage: <Buffer >,
+    _closeTimer: null,
+    _extensions: {},
+    _paused: false,
+    _protocol: '',
+    _readyState: 3,
+    _receiver: null,
+    _sender: null,
+    _socket: null,
+    _bufferedAmount: 0,
+    _isServer: false,
+    _redirects: 0,
+    _autoPong: true,
+    _url: 'ws://127.0.0.1:50907/devtools/browser/9f2eaa0c-7131-4a78-bbf2-c607847ac53d',
+    _originalIpc: false,
+    _originalSecure: false,
+    _originalHostOrSocketPath: '127.0.0.1:50907',
+    _req: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kType)]: 'error',
+  [Symbol(kError)]: Error: socket hang up
+      at connResetException (node:internal/errors:721:14)
+      at Socket.socketOnEnd (node:_http_client:519:23)
+      at Socket.emit (node:events:526:35)
+      at endReadableNT (node:internal/streams/readable:1408:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+    code: 'ECONNRESET'
+  },
+  [Symbol(kMessage)]: 'socket hang up'
 }
 
-// this function takes a file and flattens the data (formatted to be put in csv format)
-export async function flattenFile(filePath, orderOfPlans, orderOfSources, orderOfPlanIDs) {
-    let currentDrug, currentCategory, currentRank, currentQty, currentRefillFreq, currentPackageOption, currentBorG
-    let planSourceObject = []
-    let planSourceObjects = []
-    let lines = []
-        await csv().fromFile(filePath).subscribe((lineData, rowNum) => {
-            if (lineData.drugName != currentDrug) {
-                if (rowNum > 0) {
-                    // add the completed line to the list
-                    lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`)
-                }
-                // reset loop state
-                planSourceObject = []
-                planSourceObjects = []
-                currentDrug = lineData.drugName
-                currentRank = lineData.rank
-                currentCategory = lineData.drugCategory
-                currentQty = lineData.quantity
-                currentPackageOption = lineData.packageOption
-                currentBorG = lineData.brandGenericFlag
-                currentRefillFreq = "30"
-            }
-            if (!orderOfPlans.includes(lineData.planName)) {
-                orderOfPlans.push(lineData.planName)
-            }
-            if (!orderOfSources.includes(lineData.source)) {
-                orderOfSources.push(lineData.source);
-            }
-    
-            if (!orderOfPlanIDs.includes(lineData.planId)) {
-                orderOfPlanIDs.push(lineData.planId);
-            }
-    
-            planSourceObject[orderOfSources.indexOf(lineData.source)] = lineData.cost
-            planSourceObjects[orderOfPlans.indexOf(lineData.planName)] = planSourceObject.slice()
-        });
-    
-        // required for the last price line
-        lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`)
-    
+> hc-gov-rankings@1.0.0 premain
+> cp -a conf/. bin/conf/ && tsc
 
-    return lines
+
+> hc-gov-rankings@1.0.0 main
+> node bin/src/main.js -z 93454 -d market --indx_drg 21:40 --indx_phrm 0:3 --headless false
+
+Range of indexies provided. Scraping drugs at positions 21 to 40
+Range of indexies provided. Scraping pharmacies at positions 0 to 3
+Initializing page for main.ts
+Getting current page
+%s[8:42:49 AM] PageManager                 |  Initializing browser
+%s[8:42:49 AM] PageManager                 |  launching new puppeteer
+ErrorEvent {
+  [Symbol(kTarget)]: WebSocket {
+    _events: [Object: null prototype] { open: [Function], error: [Function] },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    _binaryType: 'nodebuffer',
+    _closeCode: 1006,
+    _closeFrameReceived: false,
+    _closeFrameSent: false,
+    _closeMessage: <Buffer >,
+    _closeTimer: null,
+    _extensions: {},
+    _paused: false,
+    _protocol: '',
+    _readyState: 3,
+    _receiver: null,
+    _sender: null,
+    _socket: null,
+    _bufferedAmount: 0,
+    _isServer: false,
+    _redirects: 0,
+    _autoPong: true,
+    _url: 'ws://127.0.0.1:50912/devtools/browser/3aa85589-02e1-4fe1-8dd9-d08ef02ec1d4',
+    _originalIpc: false,
+    _originalSecure: false,
+    _originalHostOrSocketPath: '127.0.0.1:50912',
+    _req: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kType)]: 'error',
+  [Symbol(kError)]: Error: socket hang up
+      at connResetException (node:internal/errors:721:14)
+      at Socket.socketOnEnd (node:_http_client:519:23)
+      at Socket.emit (node:events:526:35)
+      at endReadableNT (node:internal/streams/readable:1408:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+    code: 'ECONNRESET'
+  },
+  [Symbol(kMessage)]: 'socket hang up'
 }
 
-//TODO - moving finished xl files into a seperate dir, may not be needed.
-
-// export async function prepFile(){
-
-// }
+> hc-gov-rankings@1.0.0 premain
+> cp -a conf/. bin/conf/ && tsc
 
 
-export async function outputToExcel(fullPathOut,filename, flatFilePath, zipCode, flattenedZipDataObjects) {
+> hc-gov-rankings@1.0.0 main
+> node bin/src/main.js -z 93454 -d market --indx_drg 21:40 --indx_phrm 4:7 --headless false
 
-    let xlfileName = path.join(fullPathOut,`${filename}_xl_file.xlsx`)
-
-    //open a workbook
-    let workbook = new Exceljs.Workbook();
-    //add a sheet
-    let worksheet = workbook.addWorksheet("New Sheet")
-    worksheet.columns = flattenedZipDataObjects[0].map(row => new Object({ header: row[0], key: row[0]}))
-    // add 2 empty rows above header row
-    worksheet.spliceRows(1, 0, []) 
-    worksheet.spliceRows(1, 0, []) 
-    // Insert allrow data
-    const rows = []
-    flattenedZipDataObjects.forEach(row => rows.push(row.map(data => data[1])))
-    worksheet.addRows(rows);
-    // default stylingworksheet
-    worksheet.properties.defaultColWidth = 10;
-    worksheet.properties.defaultCellWidth = 10;
-    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
-    worksheet.getRow(2).alignment = { vertical: 'middle', horizontal: 'left' };
-    worksheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
-    worksheet.getRow(1).height = 35;
-    worksheet.getRow(2).height = 35;
-    worksheet.getRow(3).height = 35;
-    worksheet.getColumn(1).width = 8;
-    worksheet.getColumn(2).width = 16;
-    worksheet.getColumn(3).width = 35;
-    worksheet.getColumn(4).width = 9;
-    worksheet.getColumn(5).width = 16;
-    worksheet.getColumn(6).width = 16;
-    worksheet.getRow(1).font = { bold: true, size: 14 };
-    worksheet.getRow(2).font = { bold: true, size: 12 };
-    worksheet.getRow(3).font = { bold: true, size: 12 };
-    worksheet.getRow(1).border = {
-            top: { style: 'medium' },
-            left: { style: 'medium' },
-            bottom: { style: 'medium' },
-            right: { style: 'medium' }
-        };
-    worksheet.getRow(2).border = {
-            top: { style: 'medium' },
-            left: { style: 'medium' },
-            bottom: { style: 'medium' },
-            right: { style: 'medium' }
-        };
-    worksheet.getColumn(7).border = {
-            right: { style: 'medium' }
-        };
-
-    // Merge cells Date
-    const zipAndDateCellRange = 'A1:G2'
-    worksheet.mergeCells(zipAndDateCellRange)
-    const today = new Date();
-    const dateString = `${today.getFullYear()}-${('0' + (today.getMonth() + 1)).slice(-2)}-${('0' + today.getDate()).slice(-2)}`;
-    worksheet.getCell('A2').value = `Zip Code: ${zipCode} \n Report Date: ${dateString}`
-    
-    // Split planName, planId, and Pharmacy to own cells
-    let firstPlanColumnNum = 7;
-    for (let i =  firstPlanColumnNum; i < worksheet._columns.length; i++) {
-        let fullColumn =  worksheet._columns[i]
-        let splitColNm = fullColumn.key.split('_')
-        let planId = splitColNm[0]
-        let planName = splitColNm[1]
-        let pharmacyName = splitColNm[2]
-        let thisColumn = worksheet.getColumn(fullColumn.key)
-        worksheet.getCell(1, thisColumn._number).value = `Plan Name: ${planName}`
-        worksheet.getCell(2, thisColumn._number).value = `Plan Id: ${planId}`
-        worksheet.getCell(3, thisColumn._number).value = pharmacyName
-        worksheet.getCell(1, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
-        worksheet.getCell(2, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
-        worksheet.getCell(3, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
-        worksheet.getCell(3, thisColumn._number).width = 30;
-        
-    }
-    // Merge cells row 1 and row 2 for plans
-    firstPlanColumnNum = 8;
-    let mergeSpan = 7;
-    let currentColumnNum = worksheet.getCell(1, firstPlanColumnNum)._column._number;
-    let lastColumnNumber = worksheet._columns[worksheet._columns.length-1]._number
-    while (currentColumnNum+mergeSpan <= lastColumnNumber) {
-        worksheet.mergeCells(1, currentColumnNum, 1, currentColumnNum+mergeSpan)
-        worksheet.mergeCells(2, currentColumnNum, 2, currentColumnNum+mergeSpan)
-        currentColumnNum = currentColumnNum + mergeSpan + 1; // next cell column number
-    }
-
-    // //Frame out file so we can tell how many rows and columns there are
-
-    const columnCount = worksheet.actualColumnCount;
-    const rowCount = worksheet.actualRowCount;
-    let mailOrderCol = 8;
-    //Find Mail-Order Pharmacy price (it's always the last cell in the group so we're gonna check each column and see)
-    for(let col = 8; col <= columnCount; col++)
-    {
-        var cellText = (worksheet.getCell(worksheet.getRow(3).getCell(col)._address).value).substring(0, 100);
-
-        if(cellText === 'Mail order pharmacy')
-        {
-            mailOrderCol = col - 7;
-            break;
-        }
-    }
-    console.log(`${mailOrderCol} Pharmacies Detected.`)
-    let pharmacyCounter = 1;
-    //console.log(columnCount + ' - ' + rowCount)
-    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-        for (let colNum = 8; colNum <= columnCount; ++colNum) {
-            if ((pharmacyCounter % mailOrderCol) == 0 && colNum !== 8) {
-                // Add style border
-                worksheet.getColumn(colNum).border = {
-                    right: { style: 'medium' }
-                };
-                //Find the value of that cell
-                var mailText = (worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value).substring(0, 100);
-                var mailValue: number = +mailText;
-
-                //Find a Mail-Order Cell, and track back 1x1 for X number of cells and see if the mail price needs to be highlighted
-                //X number of cells = number of pharmacies
-                for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
-                    //Grab the address of the current "working cell"
-                    let pharmAddress = (worksheet.getRow(rowNum).getCell((colNum - retroNum))._address).toString();
-
-                    //Cut the currency off the cell value and reassign that cell to that number
-                    var pharmText = (worksheet.getCell(pharmAddress).value).substring(0, 100)
-                    var pharmValue: number = +pharmText;
-
-                    //Highlight the cell yellow if the pharmacy price is more than 3x the mail order pharmacy cost
-                    if (pharmValue >= (mailValue * 3)) {
-                        worksheet.getCell(pharmAddress).fill = {
-                            type: 'pattern',
-                            pattern: 'solid',
-                            fgColor: { argb: 'FFFB00' }
-                        };
-                    }
-                }
-            }
-            pharmacyCounter++;
-        }
-    }
-    
-    // Loop through the file and convert each cell to a number type format
-    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-        for (let colNum = 8; colNum <= columnCount; ++colNum) {
-            let address = (worksheet.getRow(rowNum).getCell((colNum))._address).toString();
-            let value = parseFloat(worksheet.getCell(address).value);
-            // console.log(`Address: ${address} - Value: ${value}`)
-            worksheet.getCell(`${address}`).value = value;
-            worksheet.getCell(`${address}`).numFmt = '"$"#,##0.00';
-        }
-    }
-    // final formatting on row 3
-    worksheet.getRow(3).border = {
-        top: { style: 'medium' },
-        left: { style: 'medium' },
-        bottom: { style: 'medium' },
-        right: { style: 'medium' }
-    };
-
-    await workbook.xlsx.writeFile(xlfileName);
-    return xlfileName
+Range of indexies provided. Scraping drugs at positions 21 to 40
+Range of indexies provided. Scraping pharmacies at positions 4 to 7
+Initializing page for main.ts
+Getting current page
+%s[8:42:55 AM] PageManager                 |  Initializing browser
+%s[8:42:55 AM] PageManager                 |  launching new puppeteer
+ErrorEvent {
+  [Symbol(kTarget)]: WebSocket {
+    _events: [Object: null prototype] { open: [Function], error: [Function] },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    _binaryType: 'nodebuffer',
+    _closeCode: 1006,
+    _closeFrameReceived: false,
+    _closeFrameSent: false,
+    _closeMessage: <Buffer >,
+    _closeTimer: null,
+    _extensions: {},
+    _paused: false,
+    _protocol: '',
+    _readyState: 3,
+    _receiver: null,
+    _sender: null,
+    _socket: null,
+    _bufferedAmount: 0,
+    _isServer: false,
+    _redirects: 0,
+    _autoPong: true,
+    _url: 'ws://127.0.0.1:50920/devtools/browser/31050f17-93f3-4389-9140-a1d9b474b87b',
+    _originalIpc: false,
+    _originalSecure: false,
+    _originalHostOrSocketPath: '127.0.0.1:50920',
+    _req: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kType)]: 'error',
+  [Symbol(kError)]: Error: socket hang up
+      at connResetException (node:internal/errors:721:14)
+      at Socket.socketOnEnd (node:_http_client:519:23)
+      at Socket.emit (node:events:526:35)
+      at endReadableNT (node:internal/streams/readable:1408:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+    code: 'ECONNRESET'
+  },
+  [Symbol(kMessage)]: 'socket hang up'
 }
+
+> hc-gov-rankings@1.0.0 premain
+> cp -a conf/. bin/conf/ && tsc
+
+
+> hc-gov-rankings@1.0.0 main
+> node bin/src/main.js -z 93454 -d market --indx_drg 41:60 --indx_phrm 0:3 --headless false
+
+Range of indexies provided. Scraping drugs at positions 41 to 60
+Range of indexies provided. Scraping pharmacies at positions 0 to 3
+Initializing page for main.ts
+Getting current page
+%s[8:43:00 AM] PageManager                 |  Initializing browser
+%s[8:43:00 AM] PageManager                 |  launching new puppeteer
+ErrorEvent {
+  [Symbol(kTarget)]: WebSocket {
+    _events: [Object: null prototype] { open: [Function], error: [Function] },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    _binaryType: 'nodebuffer',
+    _closeCode: 1006,
+    _closeFrameReceived: false,
+    _closeFrameSent: false,
+    _closeMessage: <Buffer >,
+    _closeTimer: null,
+    _extensions: {},
+    _paused: false,
+    _protocol: '',
+    _readyState: 3,
+    _receiver: null,
+    _sender: null,
+    _socket: null,
+    _bufferedAmount: 0,
+    _isServer: false,
+    _redirects: 0,
+    _autoPong: true,
+    _url: 'ws://127.0.0.1:50922/devtools/browser/13292517-9716-4b07-81a8-40af5d9e38c0',
+    _originalIpc: false,
+    _originalSecure: false,
+    _originalHostOrSocketPath: '127.0.0.1:50922',
+    _req: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kType)]: 'error',
+  [Symbol(kError)]: Error: socket hang up
+      at connResetException (node:internal/errors:721:14)
+      at Socket.socketOnEnd (node:_http_client:519:23)
+      at Socket.emit (node:events:526:35)
+      at endReadableNT (node:internal/streams/readable:1408:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+    code: 'ECONNRESET'
+  },
+  [Symbol(kMessage)]: 'socket hang up'
+}
+
+> hc-gov-rankings@1.0.0 premain
+> cp -a conf/. bin/conf/ && tsc
+
+
+> hc-gov-rankings@1.0.0 main
+> node bin/src/main.js -z 93454 -d market --indx_drg 41:60 --indx_phrm 4:7 --headless false
+
+Range of indexies provided. Scraping drugs at positions 41 to 60
+Range of indexies provided. Scraping pharmacies at positions 4 to 7
+Initializing page for main.ts
+Getting current page
+%s[8:43:05 AM] PageManager                 |  Initializing browser
+%s[8:43:05 AM] PageManager                 |  launching new puppeteer
+ErrorEvent {
+  [Symbol(kTarget)]: WebSocket {
+    _events: [Object: null prototype] { open: [Function], error: [Function] },
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    _binaryType: 'nodebuffer',
+    _closeCode: 1006,
+    _closeFrameReceived: false,
+    _closeFrameSent: false,
+    _closeMessage: <Buffer >,
+    _closeTimer: null,
+    _extensions: {},
+    _paused: false,
+    _protocol: '',
+    _readyState: 3,
+    _receiver: null,
+    _sender: null,
+    _socket: null,
+    _bufferedAmount: 0,
+    _isServer: false,
+    _redirects: 0,
+    _autoPong: true,
+    _url: 'ws://127.0.0.1:50925/devtools/browser/c0efafe6-3404-463f-85b5-c18e373872d2',
+    _originalIpc: false,
+    _originalSecure: false,
+    _originalHostOrSocketPath: '127.0.0.1:50925',
+    _req: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kType)]: 'error',
+  [Symbol(kError)]: Error: socket hang up
+      at connResetException (node:internal/errors:721:14)
+      at Socket.socketOnEnd (node:_http_client:519:23)
+      at Socket.emit (node:events:526:35)
+      at endReadableNT (node:internal/streams/readable:1408:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:82:21) {
+    code: 'ECONNRESET'
+  },
+  [Symbol(kMessage)]: 'socket hang up'
+}
+^CTraceback (most recent call last):
+  File "/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/luc_script.py", line 104, in <module>
+    time.sleep(3)
+KeyboardInterrupt
+
+c8r6kn@LGY4TY2F54 utilities % 
