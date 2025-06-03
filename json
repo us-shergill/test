@@ -1,5 +1,4 @@
-        await currentPage.screenshot({
-            path: `${filePath}`,
-            type: 'jpeg',
-            fullPage: true
-        });
+    constructor(isHeadless: boolean | "new" = "new", logOutPath?: string) { 
+        this.isHeadless = isHeadless;
+        this.logOutPath = `${logOutPath}.log`;
+    }
