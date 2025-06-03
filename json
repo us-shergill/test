@@ -2,3 +2,8 @@
 this.context = await this.browser.createBrowserContext({
     ignoreHTTPSErrors: true
 });
+
+this.page = await this.context.newPage();  // ✅ New way with context
+
+
+await this.context.close();  // ✅ Close context first
