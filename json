@@ -1,8 +1,1 @@
-drugCostTablesExpanded = 'section[id="drug-coverage"] > div[class="Collapsible"]',
-
-Handle<HTMLDivElement>[]'.
-  Type 'ElementHandle<HTMLElement>' is not assignable to type 'ElementHandle<HTMLDivElement>'.
-    Property 'align' is missing in type 'HTMLElement' but required in type 'HTMLDivElement'.
-
-71         costSections = await currentPage.$$(CSSSelectors.drugCostTablesExpanded);
-           ~~~~~~~~~~~~
+'section#drug-coverage > div.mct-c-table__container'
