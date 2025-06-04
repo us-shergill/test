@@ -1,1 +1,565 @@
-'section#drug-coverage > div.mct-c-table__container'
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_181_to_200_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_181_to_200_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_181_to_200_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_181_to_200_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_201_to_220_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_201_to_220_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_201_to_220_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_201_to_220_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_21_to_40_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_21_to_40_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_21_to_40_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_21_to_40_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_221_to_240_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_221_to_240_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_221_to_240_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_221_to_240_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_241_to_250_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_241_to_250_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_241_to_250_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_241_to_250_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_41_to_60_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_41_to_60_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_41_to_60_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_41_to_60_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_61_to_80_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_61_to_80_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_61_to_80_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_61_to_80_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_81_to_100_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_81_to_100_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_81_to_100_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_market_81_to_100_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_0_to_20_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_0_to_20_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_0_to_20_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_0_to_20_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_101_to_120_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_101_to_120_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_101_to_120_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_101_to_120_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_121_to_140_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_121_to_140_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_121_to_140_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_121_to_140_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_141_to_160_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_141_to_160_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_141_to_160_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_141_to_160_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_161_to_180_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_161_to_180_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_161_to_180_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_161_to_180_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_181_to_200_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_181_to_200_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_181_to_200_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_181_to_200_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_21_to_40_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_21_to_40_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_21_to_40_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_21_to_40_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_41_to_60_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_41_to_60_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_41_to_60_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_41_to_60_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_61_to_80_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_61_to_80_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_61_to_80_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_61_to_80_phrm_4_to_7.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_81_to_100_phrm_0_to_3.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_81_to_100_phrm_0_to_3.log
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_81_to_100_phrm_4_to_7.csv
+fileManager.ts:103
+/Users/c8r6kn/git/hc-gov-tsprices/output/93454_special_81_to_100_phrm_4_to_7.log
+fileManager.ts:103
+Grouped Files Detected:
+writeToExcel.ts:80
+{21117: Array(46), 83704: Array(46), 93454: Array(46)}
+writeToExcel.ts:81
+Working on file: 21117
+writeToExcel.ts:37
+ An error occurred while combining output:  
+combineAndExport.ts:27
+TypeError: Cannot read properties of undefined (reading 'map')
+    at writeToFile (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:42:48)
+    at combineAndExport (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/writeToExcel.ts:16:30)
+    at process.processTicksAndRejections (/Users/c8r6kn/git/hc-gov-tsprices/lib/internal/process/task_queues.js:95:5)
+    at async combine (/Users/c8r6kn/git/hc-gov-tsprices/src/utilities/combineAndExport.ts:17:5)
+    at async tryCombine (/Users/c8r6kn/git/hc-gov-tsprices/bin/src/utilities/combineAndExport.js:44:24) {stack: 'TypeError: Cannot read properties of undefine…/bin/src/utilities/combineAndExport.js:44:24)', message: "Cannot read properties of undefined (reading 'map')"}
+
+combineAndExport.ts:28
+No debugger available, can not send 'variables'
+
+
+
+
+import * as path from 'path';
+import { listAll } from './fileManager';
+import { combineAndExport } from './writeToExcel';
+
+const homeDir : string = "/hc-gov-tsprices";
+
+const blue = '\x1b[1;96m%s\x1b[0m';
+const red = '\x1b[31m';
+const green = '\x1b[32m';
+const reset = '\x1b[0m\x1b[0m';
+
+async function combine(fullPath?) {
+    const outputDir = fullPath || process.env.NAS_PATH || path.join(__dirname,'../../../output')
+    console.log(`Output path determined as: ${outputDir}`)
+    listAll(outputDir);
+    // Run the combine command on our scrapes
+    await combineAndExport(outputDir);
+}
+
+async function tryCombine() {
+    try {
+        console.log(blue, "Combining results", reset);
+        let combined = await combine();
+        console.log(green, "Run successful! Output files available at " + homeDir + "/output", reset);
+        process.exit(0);
+    } catch (e) {
+        console.log(red, "An error occurred while combining output: ", reset);
+        console.log(e);
+        process.exit(1);
+    }
+}
+
+tryCombine();
+
+
+import * as fs from 'fs';
+import * as path from 'path';
+import * as glob from 'glob';
+import * as os from 'os';
+import { readCsv } from './fileManager';
+const csv = require('csvtojson');
+const Exceljs = require('exceljs');
+
+
+export async function combineAndExport(fullPathOut) {
+    const grps = await getFilePathGroups(fullPathOut);
+    let flatFilePath
+    // for each zip grouping (ie for each zipcode) files are combined and written as one flat csv file per zip 
+    for (const g of Object.keys(grps)) {
+        let flattenedZipDataObjects = await flattenFileGroup(grps[g])
+        flatFilePath = await writeToFile(g, flattenedZipDataObjects)
+        let fileName = g
+        let zip = fileName.split("_")[0]
+        await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects)
+    }
+}
+export function testHeaders(flattenedZipDataObjects) {
+    const lengths = flattenedZipDataObjects.map(obj => obj.length).flat()
+    const distinctLengths = new Set(lengths)
+    if (distinctLengths.size !== 1) {
+        throw 'Unexpected plans and pharmacy counts found. Some drugs may have missing drug costs for a plan or pharmacy.';
+    }
+    const distinctHeaders = new Set()
+    flattenedZipDataObjects.forEach(obj => distinctHeaders.add(obj.map(row => row[0]).join(',')))
+    if (distinctHeaders.size !== 1) {
+        throw 'Unexpected set of headers found. Some drugs may have missing drug costs for a plan or pharmacy.';
+    }
+}
+export async function writeToFile(fileName, flattenedZipDataObjects) {
+    // TODO file name
+    const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`)
+    console.log(`Working on file: ${fileName}`)
+    try {fs.unlinkSync(reportFile) } catch (e) { }
+    
+    // testHeaders(flattenedZipDataObjects)
+
+    let header = `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`
+    let lines = [header]
+    for (const line of flattenedZipDataObjects){
+        let fullLine = line.map(row => {
+            // remove comma from subelement to prevent them from accidentally being used as a delimiter
+            return row[1].toString().replace(/,/g, '')                                         
+        }).join(',')
+            
+        lines.push(`${fullLine}\n`)
+    }
+    lines.forEach(ln => {
+        fs.appendFileSync(reportFile, ln)
+    })
+    return reportFile
+}
+// each zipcode may have multiple seperate files, this function creates a dictionary that groups the filepaths of those sep files by zip to be iterated on later
+export async function getFilePathGroups(fullPathOut) {
+    let pattern = `${fullPathOut}/*.csv`
+    const csvDataFiles = glob.sync(pattern);
+
+    let testStr
+    let parts = [];
+    let groupGlobs = [];
+    csvDataFiles.forEach(nm => {
+        parts = path.basename(nm).split('_')        
+        // if no indices provided, split on _ will give something like esrd.csv for parts[1], so replace the .csv part
+        testStr = `${parts[0]}`
+        if (groupGlobs.indexOf(testStr) < 0) {
+            groupGlobs.push(testStr)
+        }
+    })
+    let groupedFiles = {}
+    groupGlobs.forEach(glb => {
+        pattern = `${fullPathOut}/${glb}*.csv`;
+        // sort and rank of the drug output
+        groupedFiles[glb] = glob.sync(pattern).sort((a, b) => a.localeCompare(b, undefined,{ numeric: true }));
+    })
+
+    console.log("Grouped Files Detected:")
+    console.log(groupedFiles);
+    return groupedFiles   
+}
+
+//this function takes the filegroup list for each zip and flattens the file data and combines them and adds some header information
+export async function flattenFileGroup(fileGroupList) {
+    let planIdMap = {}
+
+    let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList)
+    let flattenedZipData = flattenZipData(zipGroupSortedObjects, planIdMap)
+    return flattenedZipData
+}
+export async function combineAndSortFileGroupData(fileGroupList) {
+
+    let zipData = []
+    for (const fileName of fileGroupList){
+        let fileData = await readCsv(fileName)
+        zipData.push(...fileData)
+    }
+    // Sort by drugCategory, drugName, planId, mail order last
+    zipData.sort(function (a, b) {
+        let exceptions = [ "Mail order pharmacy" ], indexA, indexB;
+        indexA = exceptions.indexOf(a.source);
+        indexB = exceptions.indexOf(b.source);
+        let mail_order_calc = 0;
+        if (indexA === -1 && indexB === -1) {
+            mail_order_calc = a.source.toLowerCase().localeCompare(b.source.toLowerCase()); // regular case
+        } else {
+            mail_order_calc = indexA - indexB // index will be -1 (doesn't occur), 0 or 1
+        }
+        return (
+            a.drugCategory.localeCompare(b.drugCategory) || 
+            // a.drugGroup.localeCompare(b.drugGroup) ||
+            a.brandGenericFlag.localeCompare(b.brandGenericFlag) ||
+            a.rank - b.rank||
+            a.drugName.localeCompare(b.drugName) ||
+            a.planId.localeCompare(b.planId) || 
+            mail_order_calc
+        )
+    });
+    
+    return zipData 
+}
+export function flattenZipData(zipData, planIdMap) {
+    let flattenedZipData = [];
+    zipData.forEach(priceObjct => {
+        let found = flattenedZipData.find(objct => 
+            objct[0][1] == priceObjct.rank &&
+            objct[1][1] == priceObjct.drugCategory &&
+            objct[2][1] == priceObjct.drugName &&
+            objct[3][1] == priceObjct.quantity
+        )
+        if (!!found) {
+            found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`,priceObjct.cost])
+        } else {
+            var flattenedObj = [
+                [`Rank`, priceObjct.rank],
+                ['Drug Category', priceObjct.drugCategory],
+                ['Drug', priceObjct.drugName],
+                ['Quantity', priceObjct.quantity],
+                ['Refill Frequency', '30'],
+                ['Package Option', priceObjct.packageOption],
+                ['Brand or Generic', priceObjct.brandGenericFlag],
+                [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
+            ]
+            flattenedZipData.push(flattenedObj)
+        }
+        planIdMap[`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`] = priceObjct.planId
+    })    
+    return flattenedZipData
+}
+
+// this function takes a file and flattens the data (formatted to be put in csv format)
+export async function flattenFile(filePath, orderOfPlans, orderOfSources, orderOfPlanIDs) {
+    let currentDrug, currentCategory, currentRank, currentQty, currentRefillFreq, currentPackageOption, currentBorG
+    let planSourceObject = []
+    let planSourceObjects = []
+    let lines = []
+        await csv().fromFile(filePath).subscribe((lineData, rowNum) => {
+            if (lineData.drugName != currentDrug) {
+                if (rowNum > 0) {
+                    // add the completed line to the list
+                    lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`)
+                }
+                // reset loop state
+                planSourceObject = []
+                planSourceObjects = []
+                currentDrug = lineData.drugName
+                currentRank = lineData.rank
+                currentCategory = lineData.drugCategory
+                currentQty = lineData.quantity
+                currentPackageOption = lineData.packageOption
+                currentBorG = lineData.brandGenericFlag
+                currentRefillFreq = "30"
+            }
+            if (!orderOfPlans.includes(lineData.planName)) {
+                orderOfPlans.push(lineData.planName)
+            }
+            if (!orderOfSources.includes(lineData.source)) {
+                orderOfSources.push(lineData.source);
+            }
+    
+            if (!orderOfPlanIDs.includes(lineData.planId)) {
+                orderOfPlanIDs.push(lineData.planId);
+            }
+    
+            planSourceObject[orderOfSources.indexOf(lineData.source)] = lineData.cost
+            planSourceObjects[orderOfPlans.indexOf(lineData.planName)] = planSourceObject.slice()
+        });
+    
+        // required for the last price line
+        lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`)
+    
+
+    return lines
+}
+
+//TODO - moving finished xl files into a seperate dir, may not be needed.
+
+// export async function prepFile(){
+
+// }
+
+
+export async function outputToExcel(fullPathOut,filename, flatFilePath, zipCode, flattenedZipDataObjects) {
+
+    let xlfileName = path.join(fullPathOut,`${filename}_xl_file.xlsx`)
+
+    //open a workbook
+    let workbook = new Exceljs.Workbook();
+    //add a sheet
+    let worksheet = workbook.addWorksheet("New Sheet")
+    worksheet.columns = flattenedZipDataObjects[0].map(row => new Object({ header: row[0], key: row[0]}))
+    // add 2 empty rows above header row
+    worksheet.spliceRows(1, 0, []) 
+    worksheet.spliceRows(1, 0, []) 
+    // Insert allrow data
+    const rows = []
+    flattenedZipDataObjects.forEach(row => rows.push(row.map(data => data[1])))
+    worksheet.addRows(rows);
+    // default stylingworksheet
+    worksheet.properties.defaultColWidth = 10;
+    worksheet.properties.defaultCellWidth = 10;
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(2).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(1).height = 35;
+    worksheet.getRow(2).height = 35;
+    worksheet.getRow(3).height = 35;
+    worksheet.getColumn(1).width = 8;
+    worksheet.getColumn(2).width = 16;
+    worksheet.getColumn(3).width = 35;
+    worksheet.getColumn(4).width = 9;
+    worksheet.getColumn(5).width = 16;
+    worksheet.getColumn(6).width = 16;
+    worksheet.getRow(1).font = { bold: true, size: 14 };
+    worksheet.getRow(2).font = { bold: true, size: 12 };
+    worksheet.getRow(3).font = { bold: true, size: 12 };
+    worksheet.getRow(1).border = {
+            top: { style: 'medium' },
+            left: { style: 'medium' },
+            bottom: { style: 'medium' },
+            right: { style: 'medium' }
+        };
+    worksheet.getRow(2).border = {
+            top: { style: 'medium' },
+            left: { style: 'medium' },
+            bottom: { style: 'medium' },
+            right: { style: 'medium' }
+        };
+    worksheet.getColumn(7).border = {
+            right: { style: 'medium' }
+        };
+
+    // Merge cells Date
+    const zipAndDateCellRange = 'A1:G2'
+    worksheet.mergeCells(zipAndDateCellRange)
+    const today = new Date();
+    const dateString = `${today.getFullYear()}-${('0' + (today.getMonth() + 1)).slice(-2)}-${('0' + today.getDate()).slice(-2)}`;
+    worksheet.getCell('A2').value = `Zip Code: ${zipCode} \n Report Date: ${dateString}`
+    
+    // Split planName, planId, and Pharmacy to own cells
+    let firstPlanColumnNum = 7;
+    for (let i =  firstPlanColumnNum; i < worksheet._columns.length; i++) {
+        let fullColumn =  worksheet._columns[i]
+        let splitColNm = fullColumn.key.split('_')
+        let planId = splitColNm[0]
+        let planName = splitColNm[1]
+        let pharmacyName = splitColNm[2]
+        let thisColumn = worksheet.getColumn(fullColumn.key)
+        worksheet.getCell(1, thisColumn._number).value = `Plan Name: ${planName}`
+        worksheet.getCell(2, thisColumn._number).value = `Plan Id: ${planId}`
+        worksheet.getCell(3, thisColumn._number).value = pharmacyName
+        worksheet.getCell(1, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getCell(2, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getCell(3, thisColumn._number).alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getCell(3, thisColumn._number).width = 30;
+        
+    }
+    // Merge cells row 1 and row 2 for plans
+    firstPlanColumnNum = 8;
+    let mergeSpan = 7;
+    let currentColumnNum = worksheet.getCell(1, firstPlanColumnNum)._column._number;
+    let lastColumnNumber = worksheet._columns[worksheet._columns.length-1]._number
+    while (currentColumnNum+mergeSpan <= lastColumnNumber) {
+        worksheet.mergeCells(1, currentColumnNum, 1, currentColumnNum+mergeSpan)
+        worksheet.mergeCells(2, currentColumnNum, 2, currentColumnNum+mergeSpan)
+        currentColumnNum = currentColumnNum + mergeSpan + 1; // next cell column number
+    }
+
+    // //Frame out file so we can tell how many rows and columns there are
+
+    const columnCount = worksheet.actualColumnCount;
+    const rowCount = worksheet.actualRowCount;
+    let mailOrderCol = 8;
+    //Find Mail-Order Pharmacy price (it's always the last cell in the group so we're gonna check each column and see)
+    for(let col = 8; col <= columnCount; col++)
+    {
+        var cellText = (worksheet.getCell(worksheet.getRow(3).getCell(col)._address).value).substring(0, 100);
+
+        if(cellText === 'Mail order pharmacy')
+        {
+            mailOrderCol = col - 7;
+            break;
+        }
+    }
+    console.log(`${mailOrderCol} Pharmacies Detected.`)
+    let pharmacyCounter = 1;
+    //console.log(columnCount + ' - ' + rowCount)
+    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
+        for (let colNum = 8; colNum <= columnCount; ++colNum) {
+            if ((pharmacyCounter % mailOrderCol) == 0 && colNum !== 8) {
+                // Add style border
+                worksheet.getColumn(colNum).border = {
+                    right: { style: 'medium' }
+                };
+                //Find the value of that cell
+                var mailText = (worksheet.getCell(worksheet.getRow(rowNum).getCell(colNum)._address).value).substring(0, 100);
+                var mailValue: number = +mailText;
+
+                //Find a Mail-Order Cell, and track back 1x1 for X number of cells and see if the mail price needs to be highlighted
+                //X number of cells = number of pharmacies
+                for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
+                    //Grab the address of the current "working cell"
+                    let pharmAddress = (worksheet.getRow(rowNum).getCell((colNum - retroNum))._address).toString();
+
+                    //Cut the currency off the cell value and reassign that cell to that number
+                    var pharmText = (worksheet.getCell(pharmAddress).value).substring(0, 100)
+                    var pharmValue: number = +pharmText;
+
+                    //Highlight the cell yellow if the pharmacy price is more than 3x the mail order pharmacy cost
+                    if (pharmValue >= (mailValue * 3)) {
+                        worksheet.getCell(pharmAddress).fill = {
+                            type: 'pattern',
+                            pattern: 'solid',
+                            fgColor: { argb: 'FFFB00' }
+                        };
+                    }
+                }
+            }
+            pharmacyCounter++;
+        }
+    }
+    
+    // Loop through the file and convert each cell to a number type format
+    for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
+        for (let colNum = 8; colNum <= columnCount; ++colNum) {
+            let address = (worksheet.getRow(rowNum).getCell((colNum))._address).toString();
+            let value = parseFloat(worksheet.getCell(address).value);
+            // console.log(`Address: ${address} - Value: ${value}`)
+            worksheet.getCell(`${address}`).value = value;
+            worksheet.getCell(`${address}`).numFmt = '"$"#,##0.00';
+        }
+    }
+    // final formatting on row 3
+    worksheet.getRow(3).border = {
+        top: { style: 'medium' },
+        left: { style: 'medium' },
+        bottom: { style: 'medium' },
+        right: { style: 'medium' }
+    };
+
+    await workbook.xlsx.writeFile(xlfileName);
+    return xlfileName
+}
