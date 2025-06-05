@@ -1,3 +1,21 @@
+
+Immediate action items owned by Titans:
+1. Analysis of existing AAH and listing out the columns that we use for SGD reporting
+               - Loading into GR_MEMBER
+               - Loading into submitted apps
+               - We co-ordinate with data modeler/sprinters to make sure all required columns would be present from new system (EVOLVE).
+2. Identify impacted code and steps to enhance
+               - What all tables impacted?
+               - what all procedures impacted?
+3. Impact to moving away from SIRCON agent identifiers to Agent NPN (National producer number) from new system (EVOLVE)
+               - Identify all steps where we use sircon agent ID to join from AAH and we need to consider NPN going forward.
+               - Example - Joining with MBR_SALES_AGT_DIM in datamart_member_v,if we are joining with agent ID, we need to update the join to use NPN
+               - List out the impacted procedures
+               - What all changes to be done.
+
+
+
+-------
 REPLACE PROCEDURE HSPROCS.
 PROC_FOR_AGENT_AGREEMENT_HISTORY
 (OUT PROC_MSG VARCHAR(300))
