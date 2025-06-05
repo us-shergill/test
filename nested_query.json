@@ -1,129 +1,89 @@
-{
-    "ViewConfig": {
-        "displayStart": {{ params.start_index }},
-        "displayLength": {{ params.number_of_records}},
-        "Resources": {
-            "Asset": {
-                "Id": {
-                    "name": "asset_id"
-                },
-                "createdBy": {
-                    "name": "created_by"
-                },
-                "createdOn": {
-                    "name": "created_on"
-                },
-                "lastModifiedBy": {
-                    "name": "last_modified_by"
-                },
-                "lastModified": {
-                    "name": "last_modified"
-                },
-                "system": {
-                    "name": "system"
-                },
-                "signifier": {
-                    "name": "asset_name"
-                },
-                "displayName": {
-                    "name": "asset_display_name"
-                },
-                "Status": {
-                    "name": "status",
-                    "id": {
-                        "name": "status_id"
-                    },
-                    "signifier": {
-                        "name": "status_name"
-                    },
-                    "description": {
-                        "name": "status_description", "stripHtml":true
-                    }
-                },
-                "Domain": {
-                    "name": "domain",
-                    "id": {
-                        "name": "domain_id"
-                    },
-                    "Name": {
-                        "name": "domain_name"
-                    }
-                },
-                "AssetType": {
-                    "name": "asset_type",
-                    "id": {
-                        "name": "asset_type_id"
-                    },
-                    "signifier": {
-                        "name": "asset_type_name"
-                    },
-                    "description": {
-                        "name": "description"
-                    },
-                    "attributeKind": {
-                        "name": "attribute_kind"
-                    }
-                },
-                "articulationScore": {
-                    "name": "articulation_score"
-                },
-                "avgRating": {
-                    "name": "average_rating"
-                },
-                "ratingsCount": {
-                    "name": "ratings_count"
-                },
-                "Attribute": {
-                    "name":"attribute",
-                    "class":{"name":"class"},
-                    "value":{
-                        "name": "attribute_value", "stripHtml":true
-                    }, 
-                    "AttributeType": {
-                        "name":"attribute_type", 
-                        "signifier":{"name":"attribute_type_name"}
-                    }
-                },
-                "Filter": {
-                    "AND": [
-                        {
-                            "Field": {
-                                "name": "asset_type_name",
-                                "operator": "IN",
-                                "values": ["Column", "Table", "Database View", "Data Set"]
-                            }
-                        },
-                        {
-                            "Field": {
-                                "name": "asset_display_name",
-                                "operator": "NOT_NULL"
-                            }
-                        },
-                        {
-                            "Field": {
-                                "name": "last_modified",
-                                "operator": "GREATER",
-                                "value": {{ params.start_datetime_epoch }}
-                            }
-                        },
-                        {
-                            "Field": {
-                                "name": "last_modified",
-                                "operator": "LESS",
-                                "value": {{ params.end_datetime_epoch }}
-                            }
-                        }
-                    ]
-                },
-                "Order": [
-                    {
-                        "Field": {
-                            "name": "last_modified",
-                            "order": "ASC"
-                        }
-                    }
-                ]
-            }
-        }
-    }
-}
+Certainly. Here's the information in plain text format that you can easily copy and use:
+
+---
+
+**Immediate action items owned by Titans**
+
+---
+
+**1. Analysis of existing AAH and listing out the columns that we use for SGD reporting**
+
+* AAH data is derived through multiple stages: `AHier`, `AHier_PDCR_BY_AFF_DT`, and `AHier_PDCR_BY_END_DT`.
+* These are further transformed into `BHier` and finally `CHier`, which is the core output used in downstream reporting.
+* The `CHier` table contains fields used in SGD reporting such as:
+
+  * AGENT\_ID
+  * AGENT\_PDCR\_CD
+  * SIRCON\_AGENT\_ID
+  * AGENT\_NAME
+  * AGENT\_LEVEL
+  * AGENT\_EFFECTIVE\_DATE
+  * AGREEMENT\_EFFECTIVE\_DATE
+  * AGREEMENT\_END\_DATE
+  * Role and metadata fields for each tier: PBE, GA, MGA, SGA, SGA2, FMO, RFMO, NFMO, AFMO
+* These columns are likely loaded into GR\_MEMBER and Submitted Apps.
+* Coordinate with data modelers and sprinters to ensure these columns (especially Agent NPN and tier hierarchy) are supported in the new system (EVOLVE).
+
+---
+
+**2. Identify impacted code and steps to enhance**
+
+**Impacted tables:**
+
+* temp\_BROKER\_SIRCON\_AGENT
+* AHier
+* AHier\_PDCR\_BY\_AFF\_DT
+* AHier\_PDCR\_BY\_END\_DT
+* BHier
+* CHier
+* EEChan, EEChan2, DerChan
+* REPORTING\_T.LU\_TOPLINE\_CHANNEL
+
+**Impacted procedures:**
+
+* PROC\_FOR\_AGENT\_AGREEMENT\_HISTORY
+* Any ETL procedures or views that consume data from CHier or BHier
+
+**Steps to enhance:**
+
+* Refactor logic in the stored procedure and downstream processes to align with EVOLVE data model.
+* Ensure all downstream processes are modified to consume the new hierarchy structure and identifiers.
+
+---
+
+**3. Impact of moving away from SIRCON agent identifiers to Agent NPN (National Producer Number) from new system (EVOLVE)**
+
+**Where SIRCON\_AGENT\_ID is currently used:**
+
+* It is used throughout the procedure in tables: temp\_BROKER\_SIRCON\_AGENT, AHier, BHier, CHier
+* Used in joins between hierarchy levels and as the key to identify agents
+* Referenced in downstream matching logic such as MBR\_SALES\_AGT\_DIM in datamart\_member\_v
+
+**Steps required:**
+
+* Replace all joins on SIRCON\_AGENT\_ID with joins on Agent\_NPN
+* Ensure Agent\_NPN is selected and propagated in all intermediary and final output tables like BHier and CHier
+* Modify CHier output schema to expose Agent\_NPN as the external-facing identifier
+* Verify all procedures, reports, and datamarts that use SIRCON\_AGENT\_ID and update accordingly
+
+**Examples of required changes:**
+
+* In joins like:
+  `join MBR_SALES_AGT_DIM on agent.SIRCON_AGENT_ID = ...`
+  change to:
+  `join MBR_SALES_AGT_DIM on agent.Agent_NPN = ...`
+
+**List of impacted procedures:**
+
+* PROC\_FOR\_AGENT\_AGREEMENT\_HISTORY
+* Any procedure/view that joins AAH data with external dimensions using SIRCON\_AGENT\_ID
+
+**Changes to be done:**
+
+* Refactor joins, selections, and groupings to use Agent\_NPN
+* Update data contracts for downstream consumers (GR\_MEMBER, datamart\_member\_v, Submitted Apps)
+* Validate test coverage for all code paths that previously used SIRCON\_AGENT\_ID
+
+---
+
+Let me know if you want this in markdown or Word format.
