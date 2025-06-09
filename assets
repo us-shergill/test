@@ -1,52 +1,82 @@
-Phase	Hours (with buffer)
-Analysis	32
-Development	40
-UAT/Deployment	16
-Prod support 20
-
-
-Great — to account for uncertainty, blockers, and dependencies (like Airflow access, B2B coordination, unclear logic, etc.), here’s a **buffered version** of your estimate with \~40–60% buffer added depending on risk:
+Got it — here's a **high-level Jira-ready task list**, aligned with your estimated hours per phase. Each task includes a clear deliverable, buffer for blockers, and can be used as a parent ticket or epic.
 
 ---
 
-### 🔹 **Buffered Estimates by Phase**
+### 🟦 **Analysis Phase (32 hours)**
 
-#### **Phase 1: Analysis (12–18 hours)**
+1. **Analyze BRD and OSS Data Dictionary**
+   *Understand requirements from SAR/NR BRDs and available data from ANOC OSS dictionary.*
+   **Est. Hours: 8**
 
-| Task                       | Base | Buffer | Total |
-| -------------------------- | ---- | ------ | ----- |
-| Understand BRD (SAR & NR)  | 3    | +2     | **5** |
-| Review OSS Data Dictionary | 2    | +1     | **3** |
-| Identify E2E process       | 2    | +1     | **3** |
-| Identify business logic    | 2    | +1     | **3** |
-| Draft SQL logic            | 3    | +1     | **4** |
+2. **Define End-to-End Process and Business Logic**
+   *Identify business rules, flow of data, expected outputs, and transformation steps.*
+   **Est. Hours: 10**
 
-> **Subtotal (Analysis): 12 + 6 buffer = \~18 hours**
+3. **Draft SQL Logic and Identify Input/Output Requirements**
+   *Draft initial SQL queries based on business logic and available data.*
+   **Est. Hours: 10**
 
----
-
-#### **Phase 2: Development (22–36 hours)**
-
-| Task                            | Base | Buffer | Total |
-| ------------------------------- | ---- | ------ | ----- |
-| SQL development/testing         | 6    | +2     | **8** |
-| Extract generation logic        | 5    | +2     | **7** |
-| Output to NAS                   | 2    | +1     | **3** |
-| SFTP integration + coordination | 4    | +2     | **6** |
-| Airflow DAG setup & testing     | 5    | +2     | **7** |
-| Logging, alerts, etc.           | 2    | +1     | **3** |
-
-> **Subtotal (Development): 24 + 12 buffer = \~36 hours**
+4. **Identify Access Needs and Potential Blockers**
+   *Airflow repo access, NAS write permissions, SFTP coordination, etc.*
+   **Est. Hours: 4**
 
 ---
 
-#### **Phase 3: UAT & Deployment (9–14 hours)**
+### 🟩 **Development Phase (40 hours)**
 
-| Task                       | Base | Buffer | Total |
-| -------------------------- | ---- | ------ | ----- |
-| UAT support, fixes         | 4    | +2     | **6** |
-| Deployment coordination    | 2    | +1     | **3** |
-| Post-deployment validation | 3    | +2     | **5** |
+5. **Develop SQL Extract and Output Generation Logic**
+   *Build and test SQL queries and wrap them into a reusable script/notebook/dbt model.*
+   **Est. Hours: 12**
 
-> **Subtotal (UAT/Deploy): 9 + 5 buffer = \~14 hours**
+6. **Implement File Delivery to NAS and SFTP with B2B**
+   *ETL logic to drop to NAS and coordinate/test SFTP integration with B2B team.*
+   **Est. Hours: 10**
 
+7. **Build and Test Airflow DAG for Automation**
+   *Create a new DAG or integrate into an existing one for end-to-end automation.*
+   **Est. Hours: 10**
+
+8. **Logging, Monitoring, and Error Handling Setup**
+   *Ensure logs, alerts, and retries are built into the automation pipeline.*
+   **Est. Hours: 8**
+
+---
+
+### 🟨 **UAT & Deployment Phase (16 hours)**
+
+9. **Support UAT and Make Required Fixes**
+   *Coordinate with stakeholders, run test cases, and apply fixes as needed.*
+   **Est. Hours: 8**
+
+10. **Deploy to Prod and Validate Output**
+    *Execute production deployment and verify outputs with business.*
+    **Est. Hours: 8**
+
+---
+
+### 🟥 **Prod Support Phase (20 hours)**
+
+11. **Post-Deployment Monitoring and Support**
+    *Monitor first runs, respond to issues, document runbook and handoff to ops.*
+    **Est. Hours: 20**
+
+---
+
+### ✅ Jira Summary
+
+| **Jira Task**                          | **Est. Hours** |
+| -------------------------------------- | -------------- |
+| Analyze BRD and OSS Dictionary         | 8              |
+| Define E2E Process and Business Logic  | 10             |
+| Draft SQL and Identify Input/Output    | 10             |
+| Identify Access Needs and Blockers     | 4              |
+| Develop SQL and File Generation Logic  | 12             |
+| Implement NAS and SFTP Delivery        | 10             |
+| Build and Test Airflow DAG             | 10             |
+| Set Up Logging and Error Handling      | 8              |
+| UAT Support and Fixes                  | 8              |
+| Prod Deployment and Validation         | 8              |
+| Post-Deployment Monitoring and Handoff | 20             |
+| **Total**                              | **108**        |
+
+Let me know if you’d like these formatted as epics/stories with descriptions or acceptance criteria.
