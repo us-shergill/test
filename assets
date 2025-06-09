@@ -1,14 +1,52 @@
-Inputs:
-               BRD (SAR and NR)
-               OSS Data dictionary - Utilize from ANOC (POC – Luc/Sandy)
-              
-Next Steps:
-               Analysis - Identify end to end process for deployment/automation
-                              - Identify business logic
-                              - Translate that into SQL query
-                              - Define timelines for development, testing, UAT, Prod
-               Development
-                              - File extract generation - development/testing
-                              - Place output file in the NAS Drive - ETL output
-                              - SFTP file to target business/downstream - Work with B2B Team
-                              - Schedule the end to end process in Airflow
+Phase	Hours (with buffer)
+Analysis	32
+Development	40
+UAT/Deployment	16
+Prod support 20
+
+
+Great — to account for uncertainty, blockers, and dependencies (like Airflow access, B2B coordination, unclear logic, etc.), here’s a **buffered version** of your estimate with \~40–60% buffer added depending on risk:
+
+---
+
+### 🔹 **Buffered Estimates by Phase**
+
+#### **Phase 1: Analysis (12–18 hours)**
+
+| Task                       | Base | Buffer | Total |
+| -------------------------- | ---- | ------ | ----- |
+| Understand BRD (SAR & NR)  | 3    | +2     | **5** |
+| Review OSS Data Dictionary | 2    | +1     | **3** |
+| Identify E2E process       | 2    | +1     | **3** |
+| Identify business logic    | 2    | +1     | **3** |
+| Draft SQL logic            | 3    | +1     | **4** |
+
+> **Subtotal (Analysis): 12 + 6 buffer = \~18 hours**
+
+---
+
+#### **Phase 2: Development (22–36 hours)**
+
+| Task                            | Base | Buffer | Total |
+| ------------------------------- | ---- | ------ | ----- |
+| SQL development/testing         | 6    | +2     | **8** |
+| Extract generation logic        | 5    | +2     | **7** |
+| Output to NAS                   | 2    | +1     | **3** |
+| SFTP integration + coordination | 4    | +2     | **6** |
+| Airflow DAG setup & testing     | 5    | +2     | **7** |
+| Logging, alerts, etc.           | 2    | +1     | **3** |
+
+> **Subtotal (Development): 24 + 12 buffer = \~36 hours**
+
+---
+
+#### **Phase 3: UAT & Deployment (9–14 hours)**
+
+| Task                       | Base | Buffer | Total |
+| -------------------------- | ---- | ------ | ----- |
+| UAT support, fixes         | 4    | +2     | **6** |
+| Deployment coordination    | 2    | +1     | **3** |
+| Post-deployment validation | 3    | +2     | **5** |
+
+> **Subtotal (UAT/Deploy): 9 + 5 buffer = \~14 hours**
+
