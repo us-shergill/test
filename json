@@ -1,46 +1,147 @@
-
-button.e2e-drug-add-to-list
-<html lang="en" translate="no" style="scrollbar-gutter: auto;"><head>
-  <meta name="version" content="2.30.0">
-  <meta name="referrer" content="strict-origin-when-cross-origin">
-
-  <meta charset="utf-8">
-  <meta name="google" content="notranslate">
-  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-  <meta name="theme-color" content="#000000">
-  <!--
-      manifest.json provides metadata used when your web app is added to the
-      homescreen on Android. See https://developers.google.com/web/fundamentals/engage-and-retain/web-app-manifest/
-    -->
-  <link rel="manifest" href="./manifest.json">
-  <link rel="shortcut icon" href="./favicon.ico">
-  <title>Tell us about this drug</title>
-</head>
-
-<body class="notranslate" style="overflow-y: auto;"><div data-live-announcer="true" style="border: 0px; clip: rect(0px, 0px, 0px, 0px); clip-path: inset(50%); height: 1px; margin: -1px; overflow: hidden; padding: 0px; position: absolute; width: 1px; white-space: nowrap;"><div role="log" aria-live="assertive" aria-relevant="additions"></div><div role="log" aria-live="polite" aria-relevant="additions"></div></div>
-  <noscript> You need to enable JavaScript to run this app. </noscript>
-  <!-- 
-      Global skip nav that's updated by MCT component / hook code, on every route
-      change and also with custom values for some pages
-    -->
-  <a href="#mct-app-main" class="ds-c-skip-nav" id="mct-root-skip-nav" data-listener-attached="true">Skip to content</a>
-  <!-- 
-      Live region for announcing the document title on routes where the main heading
-      (h1) doesn't automatically get focus (e.g., on landing pages)
-    -->
-  <div class="ds-u-visibility--screen-reader" aria-live="polite" role="status" id="mct-sr-title"></div>
-  <div id="mct-root"><div id="root" lang="en" lang-toggle-link="https://www.medicare.gov/plan-compare/#/manage-prescriptions?fips=16001&amp;plan_type=&amp;year=2025&amp;lang=es" login-url="https://www.medicare.gov/sso/authorize?client_id=mct&amp;redirect_uri=https%3A%2F%2Fwww.medicare.gov%2Fplan-compare%2Fsls-callback&amp;lang=en-us&amp;relay=eyJsYW5nIjoiZW4ifQ%3D%3D" logout-url="https://www.medicare.gov/plan-compare/#/logout" enable-live-chat="true" live-chat-viewpage="MCT-manage-prescriptions" header-type="MAX" disable-login="false" data-testid="ch-root"></div><dialog class="ds-c-dialog" data-cy="e2e-state-validator" id="dialog--1" aria-labelledby="dialog--1__heading" tabindex="-1"><div class="ds-c-dialog__window"><div class="ds-c-dialog__header"><button type="button" aria-label="" class="ds-c-close-button ds-c-dialog__close" id="dialog--1__close"><svg aria-hidden="true" class="ds-c-icon ds-c-icon--close ds-c-icon--close-thin " id="dialog--1__close__icon" viewBox="-2 -2 18 18" xmlns="http://www.w3.org/2000/svg"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M0 13.0332964L13.0332964 0M13.0332964 13.0332964L0 0"></path></svg></button></div><div class="ds-c-dialog__body"><div id="dialog--1__content"></div></div></div></dialog><div class="Toastify" id="globalToastContainer"></div><div class="ds-base mct-l-app"><div class="AppContent mct-l-app__content"><main id="mct-app-main" class="app__main mct-l-app__main e2e-app-main" tabindex="-1"><div class="appPage ManagePrescriptions"><div class="appPage__banner "><h1 class="" tabindex="-1">Tell us about this drug</h1></div><div class="appPage__content "><dialog class="ds-c-dialog" id="dialog--58" aria-labelledby="dialog--58__heading" tabindex="-1"><div class="ds-c-dialog__window"><div class="ds-c-dialog__header"><h2 class="ds-c-dialog__heading" id="dialog--58__heading">Error adding drug</h2><button type="button" aria-label="Close modal dialog" class="ds-c-close-button ds-c-dialog__close" id="dialog--58__close"><svg aria-hidden="true" class="ds-c-icon ds-c-icon--close ds-c-icon--close-thin " id="dialog--58__close__icon" viewBox="-2 -2 18 18" xmlns="http://www.w3.org/2000/svg"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M0 13.0332964L13.0332964 0M13.0332964 13.0332964L0 0"></path></svg></button></div><div class="ds-c-dialog__body"><div id="dialog--58__content"></div><div class="ds-c-dialog__actions"><button type="button" class="ds-c-button ds-c-button--solid">Add other drugs</button><button type="button" class="ds-c-button ds-c-button--ghost">Next</button></div></div></div></dialog><form class="EditPrescription e2e-drug-form"><h2 class="ds-u-margin--0 ds-u-margin-top--1 ds-u-margin-bottom--4">Eliquis</h2><div class="ds-c-dropdown"><label class="ds-c-label" id="drug-select-dosage__label">Dosage</label><div aria-hidden="true" data-a11y-ignore="aria-hidden-focus" data-testid="hidden-select-container" style="border: 0px; clip: rect(0px, 0px, 0px, 0px); clip-path: inset(50%); height: 1px; margin: -1px; overflow: hidden; padding: 0px; position: absolute; width: 1px; white-space: nowrap;"><input type="text" tabindex="0" style="font-size: 16px;"><label>Dosage<select size="3" tabindex="-1" name="dosage"><option></option><option value="">Select a dosage</option><option value="2.5|MG|DRUG_FORM_TABLET|1364441">2.5mg tablet</option><option value="5|MG|DRUG_FORM_TABLET|1364447">5mg tablet</option></select></label></div><button type="button" id="drug-select-dosage" data-testid="drug-dosage-selector" aria-labelledby="drug-select-dosage__button-content drug-select-dosage__label" aria-haspopup="listbox" aria-expanded="false" aria-controls="drug-select-dosage__menu" class="ds-c-dropdown__button ds-c-field e2e-drug-select-dosage" aria-invalid="false"><span id="drug-select-dosage__button-content" class="ds-u-truncate">5mg tablet</span><span class="ds-c-dropdown__caret"><svg aria-hidden="true" class="ds-c-icon ds-u-font-size--sm" viewBox="0 0 448 512" xmlns="http://www.w3.org/2000/svg"><path d="M212.7 148.7c6.2-6.2 16.4-6.2 22.6 0l160 160c6.2 6.2 6.2 16.4 0 22.6s-16.4 6.2-22.6 0L224 182.6 75.3 331.3c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l160-160z"></path></svg></span></button></div><div class="ds-u-display--flex ds-u-align-items--end"><div class="ds-u-clearfix e2e-drug-quantity"><label class="ds-c-label" for="drug-select-quantity" id="drug-select-quantity__label">Quantity</label><input class="ds-c-field ds-c-field--small" inputmode="numeric" pattern="[0-9]*" type="text" name="quantity" min="1" id="drug-select-quantity" aria-invalid="false" value="60"></div><div class="ds-u-clearfix"><div class="ds-c-dropdown ds-u-margin-left--3"><label class="ds-c-label" id="drug-select-frequency__label">Frequency</label><div aria-hidden="true" data-a11y-ignore="aria-hidden-focus" data-testid="hidden-select-container" style="border: 0px; clip: rect(0px, 0px, 0px, 0px); clip-path: inset(50%); height: 1px; margin: -1px; overflow: hidden; padding: 0px; position: absolute; width: 1px; white-space: nowrap;"><input type="text" tabindex="0" style="font-size: 16px;"><label>Frequency<select size="5" tabindex="-1" name="frequency"><option></option><option value="FREQUENCY_30_DAYS">Every month</option><option value="FREQUENCY_60_DAYS">Every 2 months</option><option value="FREQUENCY_90_DAYS">Every 3 months</option><option value="FREQUENCY_180_DAYS">Every 6 months</option><option value="FREQUENCY_360_DAYS">Every 12 months</option></select></label></div><button type="button" id="drug-select-frequency" data-testid="drug-frequency-selector" aria-labelledby="drug-select-frequency__button-content drug-select-frequency__label" aria-haspopup="listbox" aria-expanded="false" aria-controls="drug-select-frequency__menu" class="ds-c-dropdown__button ds-c-field" aria-invalid="false"><span id="drug-select-frequency__button-content" class="ds-u-truncate">Every month</span><span class="ds-c-dropdown__caret"><svg aria-hidden="true" class="ds-c-icon ds-u-font-size--sm" viewBox="0 0 448 512" xmlns="http://www.w3.org/2000/svg"><path d="M212.7 148.7c6.2-6.2 16.4-6.2 22.6 0l160 160c6.2 6.2 6.2 16.4 0 22.6s-16.4 6.2-22.6 0L224 182.6 75.3 331.3c-6.2 6.2-16.4 6.2-22.6 0s-6.2-16.4 0-22.6l160-160z"></path></svg></span></button></div></div></div><div class="EditPrescription__footer"><button type="submit" class="ds-c-button ds-c-button--solid e2e-drug-add-to-list ds-u-margin-right--2 ds-u-sm-margin-bottom--0 mct-u-width--full mct-u-sm-width--auto">Add to My Drug List</button><button type="button" class="ds-c-button EditPrescription__cancelButton mct-u-width--full mct-u-sm-width--auto ds-u-margin-top--2 ds-u-sm-margin-top--0">Cancel</button></div></form></div></div></main><footer class="m-c-footer"><div class="m-c-footer__linkRow"><a href="https://www.medicare.gov/about-us" data-listener-attached="true">About Medicare</a><span aria-hidden="true" class="m-c-footer__delimiter"></span><a href="https://www.medicare.gov/about-us/accessibility-nondiscrimination-notice" data-listener-attached="true">Nondiscrimination/Accessibility</a><span aria-hidden="true" class="m-c-footer__delimiter"></span><a href="https://www.medicare.gov/privacy-policy" data-listener-attached="true">Privacy Policy</a><span aria-hidden="true" class="m-c-footer__delimiter"></span><button type="button" class="ds-c-button ds-c-button--ghost SimpleFooter__linkButton">Privacy Setting</button><span aria-hidden="true" class="m-c-footer__delimiter"></span><a href="https://www.cms.gov/about-cms/information-systems/privacy/linking-outside-websites" data-listener-attached="true">Linking Policy</a><span aria-hidden="true" class="m-c-footer__delimiter"></span><a href="https://www.medicare.gov/about-us/using-this-site" data-listener-attached="true">Using this site</a><span aria-hidden="true" class="m-c-footer__delimiter"></span><a href="https://www.medicare.gov/about-us/plain-writing" data-listener-attached="true">Plain Writing</a></div><div class="m-c-footer__identityRow"><svg role="img" aria-labelledby="medicare-gov-logo--21" width="273" height="39" class="m-c-footer__medicare-logo" xml:space="preserve" preserveAspectRatio="xMidYMid meet" viewBox="0 0 198 29" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><title id="medicare-gov-logo--21">Medicare.gov</title><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
-  <!--
-      This HTML file is a template.
-      If you open it directly in the browser, you will see an empty page.
-
-      You can add webfonts, meta tags, or analytics to this file.
-      The build step will place the bundled scripts into the <body> tag.
-
-      To begin the development, run `npm start` or `yarn start`.
-      To create a production bundle, use `npm run build` or `yarn build`.
-    -->
-<script type="text/javascript" src="/lOOYeeIYtRap0Tboqrt_/9LiJc6kYVurbVb9p/MhN8fVdRQQY/SS/gHHUI4XHo"></script>
-
-
-<script src="//tealium-tags.medicare.gov/medicare-www/prod/utag.js" type="text/javascript" async=""></script><div id="ZN_56jL522eC1a1WZf"></div><iframe allow="join-ad-interest-group" data-tagging-id="AW-784518148" data-load-time="1751578274344" height="0" width="0" src="https://td.doubleclick.net/td/rul/784518148?random=1751578274335&amp;cv=11&amp;fst=1751578274335&amp;fmt=3&amp;bg=ffffff&amp;guid=ON&amp;async=1&amp;gtm=45be5710h1v9170335489za200&amp;gcd=13l3l3l3l1l1&amp;dma=0&amp;tag_exp=101509157~103116026~103200004~103233427~103351869~103351871~104684208~104684211~104718208~104839054~104839056~104885889~104885891&amp;u_w=1512&amp;u_h=982&amp;url=https%3A%2F%2Fwww.medicare.gov%2Fplan-compare%2F&amp;hn=www.googleadservices.com&amp;frm=0&amp;tiba=Add%20prescription%20drug&amp;did=dYmQxMT&amp;gdid=dYmQxMT&amp;npa=0&amp;auid=1512023795.1751578274&amp;uaa=arm&amp;uab=64&amp;uafvl=Chromium%3B137.0.7151.55%7CNot%252FA)Brand%3B24.0.0.0&amp;uamb=0&amp;uam=&amp;uap=macOS&amp;uapv=15.4.1&amp;uaw=0&amp;fledge=1&amp;data=event%3Dgtag.config" style="display: none; visibility: hidden;"></iframe><iframe allow="join-ad-interest-group" data-tagging-id="AW-10858757386" data-load-time="1751578274349" height="0" width="0" src="https://td.doubleclick.net/td/rul/10858757386?random=1751578274347&amp;cv=11&amp;fst=1751578274347&amp;fmt=3&amp;bg=ffffff&amp;guid=ON&amp;async=1&amp;gtm=45be5710h1v9170335489za200&amp;gcd=13l3l3l3l1l1&amp;dma=0&amp;tag_exp=101509157~103116026~103200004~103233427~103351869~103351871~104684208~104684211~104718208~104839054~104839056~104885889~104885891&amp;u_w=1512&amp;u_h=982&amp;url=https%3A%2F%2Fwww.medicare.gov%2Fplan-compare%2F&amp;hn=www.googleadservices.com&amp;frm=0&amp;tiba=Add%20prescription%20drug&amp;did=dYmQxMT&amp;gdid=dYmQxMT&amp;npa=0&amp;auid=1512023795.1751578274&amp;uaa=arm&amp;uab=64&amp;uafvl=Chromium%3B137.0.7151.55%7CNot%252FA)Brand%3B24.0.0.0&amp;uamb=0&amp;uam=&amp;uap=macOS&amp;uapv=15.4.1&amp;uaw=0&amp;fledge=1&amp;data=event%3Dgtag.config" style="display: none; visibility: hidden;"></iframe><iframe height="0" width="0" style="display: none; visibility: hidden;"></iframe><script src="//dap.digitalgov.gov/Universal-Federated-Analytics-Min.js?agency=DHHS&amp;subagency=CMS" type="text/javascript" async="" id="_fed_an_ua_tag"></script><div id="batBeacon137807296506" style="width: 0px; height: 0px; display: none; visibility: hidden;"><img id="batBeacon283617127289" width="0" height="0" alt="" src="https://bat.bing.com/action/0?ti=97143892&amp;Ver=2&amp;mid=12528be3-d77c-4942-98ff-c5456b1abcc5&amp;bo=1&amp;sid=0c251b20585511f0a02b096daca98619&amp;vid=0c253820585511f0b92d37c6d812cd1f&amp;vids=1&amp;msclkid=N&amp;pi=918639831&amp;lg=en-US&amp;sw=1512&amp;sh=982&amp;sc=30&amp;nwd=1&amp;tl=Add%20prescription%20drug&amp;p=https%3A%2F%2Fwww.medicare.gov%2Fplan-compare%2F%23%2Fmanage-prescriptions%3Ffips%3D16001%26plan_type%3D%26year%3D2025%26lang%3Den&amp;r=&amp;lt=1183&amp;evt=pageLoad&amp;sv=1&amp;cdb=AQwT&amp;rn=440459" style="width: 0px; height: 0px; display: none; visibility: hidden;"></div><script src="https://gov1.siteintercept.qualtrics.com/dxjsmodule/CoreModule.js?Q_CLIENTVERSION=2.32.0&amp;Q_CLIENTTYPE=web&amp;Q_BRANDID=medicare" defer=""></script><script src="https://gov1.siteintercept.qualtrics.com/dxjsmodule/FeedbackButtonModule.js?Q_CLIENTVERSION=2.32.0&amp;Q_CLIENTTYPE=web&amp;Q_BRANDID=medicare" defer=""></script><script src="//dap.digitalgov.gov/Universal-Federated-Analytics-Min.js?agency=DHHS&amp;subagency=CMS" type="text/javascript" async="" id="_fed_an_ua_tag"></script><style type="text/css">.QSIFeedbackButton div,.QSIFeedbackButton dl,.QSIFeedbackButton dt,.QSIFeedbackButton dd,.QSIFeedbackButton ul,.QSIFeedbackButton ol,.QSIFeedbackButton li,.QSIFeedbackButton h1,.QSIFeedbackButton h2,.QSIFeedbackButton h3,.QSIFeedbackButton h4,.QSIFeedbackButton h5,.QSIFeedbackButton h6,.QSIFeedbackButton span,.QSIFeedbackButton pre,.QSIFeedbackButton form,.QSIFeedbackButton fieldset,.QSIFeedbackButton textarea,.QSIFeedbackButton p,.QSIFeedbackButton blockquote,.QSIFeedbackButton tr,.QSIFeedbackButton th,.QSIFeedbackButton td{ margin: 0; padding: 0;background-color: transparent; border: 0; font-size: 12px; line-height: normal; vertical-align:baseline; box-shadow: none; }.QSIFeedbackButton img{ height: auto; width: auto; margin: 0; padding: 0 }.QSIFeedbackButton ul,.QSIFeedbackButton ol{ margin: 12px 0; padding-left: 40px; }.QSIFeedbackButton ul li{ list-style-type: disc; }.QSIFeedbackButton ol li{ list-style-type: decimal; }.QSIFeedbackButton .scrollable{ -webkit-overflow-scrolling: touch; }.QSIFeedbackButton table{ border-collapse: collapse; border-spacing: 0; }.QSIFeedbackButton table td{ padding: 2px; }.QSIFeedbackButton iframe{ max-height: none; }.QSIFeedbackButton *{ box-sizing: content-box; }</style><div class="QSIFeedbackButton" style="position: fixed; visibility: hidden; inset: 0px; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; margin: 0px; padding: 0px; z-index: 2000000001;"><button role="button" aria-label="Feedback" style="position: fixed; visibility: visible; cursor: pointer; border: none; background-color: transparent; padding: 0px; margin: 0px; bottom: 414px; right: -1px; width: 29px;" id="QSIFeedbackButton-btn"><img src="https://gov1.qualtrics.com/WRQualtricsSiteIntercept/Graphic.php?IM=IM_1NcmduPHZGVHlEV" alt="Feedback" style="max-width: 110px; max-height: 110px; display: block;"></button></div><div style="display: none;"></div><b tabindex="-1" style="position: absolute; left: -1000px;"><iframe style="display: none;"></iframe></b><iframe id="IdvGkEOKDfPAHFB1" style="display: none;"></iframe><div style="display: none;"></div></body><iframe id="qiORRJYVs9oa5D72" style="display: none;"></iframe><div style="display: none;"></div></html>
+SAR SQL below for the detail file.
+Need to split the output files based on contract and PBP values and also need to create summary files and missing info files accordingly.
+ 
+-- Create SAR Plan Table for inclusion
+--drop table VT_SAR_PLAN
+CREATE MULTISET VOLATILE TABLE VT_SAR_PLAN
+(
+               Contract VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+               PBP VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+               Segment VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+               State VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+               ServiceAreaCountyName VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+               ServiceAreaCountyCode VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC
+) ON COMMIT PRESERVE ROWS;
+ 
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Butts ','11160');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Greene','11520');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Morgan','11771');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Oconee','11800');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','002','GA','Banks','11040');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','002','GA','Chattooga','11240');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','002','GA','Dawson','11350');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','002','GA','Fayette','11451');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','003','002','GA','White','11963');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','006','000','GA','Cobb','11290');
+INSERT INTO VT_SAR_PLAN VALUES('H0439','006','000','GA','DeKalb','11370');
+INSERT INTO VT_SAR_PLAN VALUES('H0672','005','000','NM','San Juan','32220');
+INSERT INTO VT_SAR_PLAN VALUES('H2108','029','000','DE','Kent','08000');
+INSERT INTO VT_SAR_PLAN VALUES('H2108','042','001','DE','Kent','08000');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','009','000','TX','Newton','45821');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','033','000','TN','Lake','44470');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','033','000','TN','Obion','44650');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','036','000','TN','Bedford','44010');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','036','000','TN','Grundy','44300');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','036','000','TN','Haywood','44370');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','039','000','AR','Crawford','04160');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','046','001','AL','Lowndes','01420');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','046','002','AL','Cherokee','01090');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','046','002','AL','Colbert','01160');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','046','002','AL','Lawrence','01390');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','049','005','TN','Lake','44470');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','049','005','TN','Obion','44650');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','052','000','AR','Crawford','04160');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','060','001','TX','Newton','45821');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','061','001','TX','Newton','45821');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','078','000','AR','Crawford','04160');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','081','000','AR','Crawford','04160');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','083','001','TX','Newton','45821');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','085','000','IL','DeKalb','14170');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','086','000','IL','DeKalb','14170');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','088','000','AL','Tuscaloosa','01620');
+INSERT INTO VT_SAR_PLAN VALUES('H4513','091','000','TX','Newton','45821');
+INSERT INTO VT_SAR_PLAN VALUES('H7849','024','000','MO','Caldwell','26120');
+INSERT INTO VT_SAR_PLAN VALUES('H7849','102','003','AR','Crawford','04160');
+INSERT INTO VT_SAR_PLAN VALUES('H9460','001','000','MO','Caldwell','26120');
+ 
+--SAR_NR_BOM_2026
+CREATE MULTISET VOLATILE TABLE VT_SAR_NR_BOM_2026
+(
+YearNum VARCHAR(64) CHARACTER SET UNICODE,
+RecordType VARCHAR(64) CHARACTER SET UNICODE,
+Contract VARCHAR(64) CHARACTER SET UNICODE,
+PBP VARCHAR(64) CHARACTER SET UNICODE,
+Segment VARCHAR(64) CHARACTER SET UNICODE,
+State VARCHAR(64) CHARACTER SET UNICODE,
+LetterMaterialID VARCHAR(64) CHARACTER SET UNICODE,
+PLANReplacementID VARCHAR(64) CHARACTER SET UNICODE
+) ON COMMIT PRESERVE ROWS;
+ 
+--Test Records only. Awaiting final list from Business (7/1/2025)
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_MA','H4513','001','000','Tennessee','INT_25_12345_C','2025_NR_SAR_OrgReplacement_H4513_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_MAPD','H7849','002','001','Illinois','INT_25_99999_C','2025_NR_SAR_OrgReplacement_H7849_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_MAPD','H7849','002','002','Illinois','INT_25_88888_C','2025_NR_SAR_OrgReplacement_H7849_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_DSNP','H7787','003','000','Texas','INT_25_77777_C','2025_NR_SAR_OrgReplacement_H7787_Texas');
+ 
+ 
+--2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD.csv
+--Extract SQL work in progress
+SELECT
+MBR.MemberID as "Member ID"
+,DMG.FirstName as FirstName
+,DMG.LastName as LastName
+,MailADDR.Address1 as Addr1
+,MailADDR.Address2 as Addr2
+,MailADDR.City as City
+,MailADDR.State as State
+,MailADDR.Zip as Zip
+,MBR.PlanID as CContract
+,MBR.PBP as CPBP
+,COALESCE(MBR.SegmentID,'000') as CSegment
+,ProductName as "Plan Name"
+,SC.SCC_CODE as "SCC Code"
+,DMG."Language" as LanguageText
+,CASE
+               WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+               WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+               WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+               WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+               ELSE ''
+               END AS "Alternate Format"
+,SC.CountyName as County
+,PhyADDR.State as PhysicalState
+,MBOM.State as "Plan State"
+,MemberID||'_SAR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
+,MBOM.RecordType as "Record Type"
+,MBOM.LetterMaterialID as "Material ID"
+,MBOM.PLANReplacementID as "Plan Replacement ID"
+ 
+FROM (
+SELECT
+               MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY
+FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+WHERE SRC_DATA_KEY = '210'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+ON        MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY
+AND MBR.MemCodNum = DMG.MemCodNum
+AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+ON MBR.PlanID = PLN.PlanID
+AND MBR.PBP = PLN.PBPID
+LEFT JOIN (
+SELECT
+               MemCodNum, Address1, Address2, City, State, Zip, SRC_DATA_KEY
+FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+WHERE AddressUse = '1'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR
+ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY
+AND MBR.MemCodNum = PhyADDR.MemCodNum
+LEFT JOIN (
+SELECT
+               MemCodNum, Address1, Address2, City, State, Zip, SRC_DATA_KEY
+FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+WHERE AddressUse = '2'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR
+ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY
+AND MBR.MemCodNum = MailADDR.MemCodNum
+JOIN VT_SAR_PLAN SAR
+ON MBR.PlanID = SAR.Contract
+AND MBR.PBP = SAR.PBP
+AND DMG.SCC1 = SAR.ServiceAreaCountyCode
+LEFT JOIN VT_SAR_NR_BOM_2026 MBOM
+ON MBR.PlanID = MBOM.Contract
+AND MBR.PBP = MBOM.PBP
+AND COALESCE(MBR.SegmentID,'000') = MBOM.Segment
+LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+ON DMG.SCC1 = SC.SCC_CODE;
