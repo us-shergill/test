@@ -1,18 +1,17 @@
-SAR SQL below for the detail file.
-Need to split the output files based on contract and PBP values and also need to create summary files and missing info files accordingly.
- 
 -- Create SAR Plan Table for inclusion
 --drop table VT_SAR_PLAN
 CREATE MULTISET VOLATILE TABLE VT_SAR_PLAN
 (
-               Contract VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
-               PBP VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
-               Segment VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
-               State VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
-               ServiceAreaCountyName VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
-               ServiceAreaCountyCode VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC
+	Contract VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+	PBP VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+	Segment VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+	State VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+	ServiceAreaCountyName VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC,
+	ServiceAreaCountyCode VARCHAR(264) CHARACTER SET UNICODE CASESPECIFIC
 ) ON COMMIT PRESERVE ROWS;
- 
+
+--SAR DML
+INSERT INTO VT_SAR_PLAN VALUES( 'H0439','003','001','GA','Butts ','11160');
 INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Butts ','11160');
 INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Greene','11520');
 INSERT INTO VT_SAR_PLAN VALUES('H0439','003','001','GA','Morgan','11771');
@@ -52,8 +51,11 @@ INSERT INTO VT_SAR_PLAN VALUES('H4513','088','000','AL','Tuscaloosa','01620');
 INSERT INTO VT_SAR_PLAN VALUES('H4513','091','000','TX','Newton','45821');
 INSERT INTO VT_SAR_PLAN VALUES('H7849','024','000','MO','Caldwell','26120');
 INSERT INTO VT_SAR_PLAN VALUES('H7849','102','003','AR','Crawford','04160');
+INSERT INTO VT_SAR_PLAN VALUES('H7849','124','001','DE','Kent','08000');
+INSERT INTO VT_SAR_PLAN VALUES('H7849','124','001','DE','New Castle','08010');
+INSERT INTO VT_SAR_PLAN VALUES('H7849','124','001','DE','Sussex','08020');
 INSERT INTO VT_SAR_PLAN VALUES('H9460','001','000','MO','Caldwell','26120');
- 
+
 --SAR_NR_BOM_2026
 CREATE MULTISET VOLATILE TABLE VT_SAR_NR_BOM_2026
 (
@@ -66,82 +68,437 @@ State VARCHAR(64) CHARACTER SET UNICODE,
 LetterMaterialID VARCHAR(64) CHARACTER SET UNICODE,
 PLANReplacementID VARCHAR(64) CHARACTER SET UNICODE
 ) ON COMMIT PRESERVE ROWS;
- 
---Test Records only. Awaiting final list from Business (7/1/2025)
-INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_MA','H4513','001','000','Tennessee','INT_25_12345_C','2025_NR_SAR_OrgReplacement_H4513_Tennessee');
-INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_MAPD','H7849','002','001','Illinois','INT_25_99999_C','2025_NR_SAR_OrgReplacement_H7849_Illinois');
-INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_MAPD','H7849','002','002','Illinois','INT_25_88888_C','2025_NR_SAR_OrgReplacement_H7849_Illinois');
-INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','SAR_DSNP','H7787','003','000','Texas','INT_25_77777_C','2025_NR_SAR_OrgReplacement_H7787_Texas');
- 
- 
+
+--BOM DML 
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','001','000','Colorado','H0672_25_1693729019_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','003','000','Colorado','H0672_25_1693731213_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','004','000','Colorado','H0672_25_1693732296_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','008','000','Colorado','H0672_25_1693735889_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','019','000','Colorado','H0672_25_1693738679_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','020','000','Colorado','H0672_25_1693740130_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','021','000','Colorado','H0672_25_1693741679_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','022','000','Colorado','H0672_25_1693743193_C','2026_NR_SAR_OrgReplacement_H0672_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H2108','039','000','Delaware','H2108_25_1693746062_C','2026_NR_SAR_OrgReplacement_H2108_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H2108','043','001','Delaware','H2108_25_1693748216_C','2026_NR_SAR_OrgReplacement_H2108_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H2108','043','002','Maryland','H2108_25_1693749954_C','2026_NR_SAR_OrgReplacement_H2108_Maryland');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H3949','026','000','Pennsylvania','H3949_25_1693752214_C','2026_NR_SAR_OrgReplacement_H3949_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H3949','032','000','New Jersey','H3949_25_1693763324_C','2026_NR_SAR_OrgReplacement_H3949_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H3949','051','000','New Jersey','H3949_25_1693767134_C','2026_NR_SAR_OrgReplacement_H3949_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4407','028','000','Mississippi','H4407_25_1693777152_C','2026_NR_SAR_OrgReplacement_H4407');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','059','000','Tennessee','H4513_25_1693779846_C','2026_NR_SAR_OrgReplacement_H4513_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','027','000','Florida','H5410_25_1693782278_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','028','000','Florida','H5410_25_1693813772_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','029','000','Florida','H5410_25_1693815160_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','030','000','Florida','H5410_25_1693817368_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','037','000','Florida','H5410_25_1693818666_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','039','000','Florida','H5410_25_1693819890_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','040','000','Florida','H5410_25_1693821385_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','041','000','Florida','H5410_25_1693823733_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','043','000','Florida','H5410_25_1693824943_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','044','000','Florida','H5410_25_1693828852_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','048','000','Florida','H5410_25_1693830421_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H5410','049','000','Florida','H5410_25_1693832205_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','050','000','Florida','H5410_25_1693833337_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','051','000','Florida','H5410_25_1693836595_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','052','000','Florida','H5410_25_1693838228_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','053','000','Florida','H5410_25_1693840244_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H5410','054','000','Florida','H5410_25_1693842284_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H5410','057','000','Florida','H5410_25_1693850342_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H5410','058','000','Florida','H5410_25_1693852899_C','2026_NR_SAR_OrgReplacement_H5410');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7389','001','000','Utah','H7389_25_1693862001_C','2026_NR_SAR_OrgReplacement_H7389_Utah');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7389','002','000','Oregon','H7389_25_1693872426_C','2026_NR_SAR_OrgReplacement_H7389_Oregon');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7389','002','000','Washington','H7389_25_1693872426a_C','2026_NR_SAR_OrgReplacement_H7389_Washington');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7389','003','000','Missouri','H7389_25_1693874360_C','2026_NR_SAR_OrgReplacement_H7389_Missouri');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7389','008','000','Nevada','H7389_25_1693882247_C','2026_NR_SAR_OrgReplacement_H7389_Nevada');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H7389','009','000','Missouri','H7389_25_1693884356_C','2026_NR_SAR_OrgReplacement_H7389_Missouri');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H7389','010','000','Missouri','H7389_25_1693886559_C','2026_NR_SAR_OrgReplacement_H7389_Missouri');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7389','011','000','Washington  ','H7389_25_1693888505_C','2026_NR_SAR_OrgReplacement_H7389_Washington');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7787','002','000','Texas','H7787_25_1693891825_C','2026_NR_SAR_OrgReplacement_H7787');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','001','000','Colorado','H7849_25_1693893809_C','2026_NR_SAR_OrgReplacement_H7849_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','006','000','Pennsylvania','H7849_25_1693895539_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','020','000','Georgia','H7849_25_1693897563_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','026','000','Colorado','H7849_25_1693899985_C','2026_NR_SAR_OrgReplacement_H7849_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','027','000','Colorado','H7849_25_1693901374_C','2026_NR_SAR_OrgReplacement_H7849_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','031','000','Pennsylvania','H7849_25_1693903563_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','033','000','New Jersey','H7849_25_1694067459_C','2026_NR_SAR_OrgReplacement_H7849_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','034','000','Tennessee','H7849_25_1694068374_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','034','000','Virginia','H7849_25_1694068374a_C','2026_NR_SAR_OrgReplacement_H7849_Virginia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','038','000','Texas','H7849_25_1694068901_C','2026_NR_SAR_OrgReplacement_H7849_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','039','000','Texas','H7849_25_1694069258_C','2026_NR_SAR_OrgReplacement_H7849_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','041','000','Texas','H7849_25_1694069542_C','2026_NR_SAR_OrgReplacement_H7849_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','042','000','Oklahoma ','H7849_25_1693889537_C','2026_NR_SAR_OrgReplacement_H7849_Oklahoma');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','051','000','Colorado','H7849_25_1693900162_C','2026_NR_SAR_OrgReplacement_H7849_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','052','000','Connecticut','H7849_25_1693911459_C','2026_NR_SAR_OrgReplacement_H7849_Connecticut');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','055','000','Oregon','H7849_25_1693915572_C','2026_NR_SAR_OrgReplacement_H7849_Oregon');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','055','000','Washington','H7849_25_1693915572a_C','2026_NR_SAR_OrgReplacement_H7849_Washington ');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','064','001','Alabama','H7849_25_1693934618_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','064','002','Alabama','H7849_25_1693943723_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','064','004','Mississippi','H7849_25_1693946430_C','2026_NR_SAR_OrgReplacement_H7849_Mississippi');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','067','000','Georgia','H7849_25_1693952462_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','068','000','Alabama','H7849_25_1693965940_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','068','000','Georgia','H7849_25_1693965940a_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','072','000','Kansas ','H7849_25_1693976311_C','2026_NR_SAR_OrgReplacement_H7849_Kansas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('','MA-Only  ','H7849','072','000','Missouri','H7849_25_1693976311_C','2026_NR_SAR_OrgReplacement_H7849_Missouri');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','073','000','Illinois','H7849_25_1693982497_C','2026_NR_SAR_OrgReplacement_H7849_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','074','000','Illinois','H7849_25_1693982497_C','2026_NR_SAR_OrgReplacement_H7849_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','074','000','Missouri','H7849_25_1693982497a_C','2026_NR_SAR_OrgReplacement_H7849_Missouri');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','078','000','Illinois','H7849_25_1693982831_C','2026_NR_SAR_OrgReplacement_H7849_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','082','000','New York','H7849_25_1693983259_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','083','000','New York','H7849_25_1693984882_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','084','000','New York','H7849_25_1693985347_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','085','000','New York','H7849_25_1693985984_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','086','000','New York','H7849_25_1693986463_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','087','000','New York','H7849_25_1693987358_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','089','000','Kentucky','H7849_25_1693990060_C','2026_NR_SAR_OrgReplacement_H7849_Kentucky');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','089','000','Ohio','H7849_25_1693990060a_C','2026_NR_SAR_OrgReplacement_H7849_Ohio');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','103','000','Texas','H7849_25_1693991021_C','2026_NR_SAR_OrgReplacement_H7849_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','104','000','Pennsylvania','H7849_25_1693992424_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','105','000','Pennsylvania','H7849_25_1693994223_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','107','000','Pennsylvania','H7849_25_1693994999_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','108','000','Pennsylvania','H7849_25_1693995494_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','109','000','Pennsylvania','H7849_25_1693995923_C','2026_NR_SAR_OrgReplacement_H7849_Pennsylvania');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','110','000','New York','H7849_25_1693996815_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','110','000','New Jersey','H7849_25_1693996815a_C','2026_NR_SAR_OrgReplacement_H7849_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','112','001','Alabama','H7849_25_1694060148_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','112','002','Alabama','H7849_25_1694060460_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','112','003','Alabama','H7849_25_1694060617_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','112','004','Alabama','H7849_25_1694060808_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','117','001','Georgia','H7849_25_1694061058_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','117','002','Georgia','H7849_25_1694061399_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('','MAPD','H7849','117','002','Alabama','H7849_25_1694061399a_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','118','000','Georgia','H7849_25_1694062126_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','119','000','Georgia','H7849_25_1694062267_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','120','000','Georgia','H7849_25_1694062838_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','121','000','Georgia','H7849_25_1694063323_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','122','000','Alabama','H7849_25_1694064022_C','2026_NR_SAR_OrgReplacement_H7849_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','122','000','Georgia','H7849_25_1694064022a_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','123','000','Delaware','H7849_25_1694064214_C','2026_NR_SAR_OrgReplacement_H7849_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','124','001','Delaware','H7849_25_1694064689_C','2026_NR_SAR_OrgReplacement_H7849_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','125','000','Delaware','H7849_25_1694066302_C','2026_NR_SAR_OrgReplacement_H7849_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','126','000','Colorado','H7849_25_1694066969_C','2026_NR_SAR_OrgReplacement_H7849_Colorado');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','127','000','New York','H7849_25_1694067212_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','128','000','New York','H7849_25_1693790778_C','2026_NR_SAR_OrgReplacement_H7849_New York');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','129','000','New Jersey','H7849_25_1693796507_C','2026_NR_SAR_OrgReplacement_H7849_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','130','000','New Jersey','H7849_25_1693807886_C','2026_NR_SAR_OrgReplacement_H7849_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','131','000','New Jersey','H7849_25_1693811582_C','2026_NR_SAR_OrgReplacement_H7849_New Jersey');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','133','001','Tennessee','H7849_25_1693813159_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','133','002','Georgia','H7849_25_1693814621_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','133','002','Tennessee','H7849_25_1693814621a_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','133','003','Tennessee','H7849_25_1693815270_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','133','004','Tennessee','H7849_25_1693816390_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','134','001','Texas','H7849_25_1693824789_C','2026_NR_SAR_OrgReplacement_H7849_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','134','002','Texas','H7849_25_1693827269_C','2026_NR_SAR_OrgReplacement_H7849_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','137','001','Georgia  ','H7849_25_1693828044_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','137','002','Georgia  ','H7849_25_1693837476_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','137','003','Georgia  ','H7849_25_1693838761_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','137','004','Georgia  ','H7849_25_1693839780_C','2026_NR_SAR_OrgReplacement_H7849_Georgia');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','138','000','Utah','H7849_25_1693842858_C','2026_NR_SAR_OrgReplacement_H7849_Utah');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','139','000','Oregon','H7849_25_1693844303_C','2026_NR_SAR_OrgReplacement_H7849_Oregon');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','139','000','Washington','H7849_25_1693844303a_C','2026_NR_SAR_OrgReplacement_H7849_Washington');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','140','001','Mississippi','H7849_25_1693845947_C','2026_NR_SAR_OrgReplacement_H7849_Mississippi');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','140','001','Tennessee','H7849_25_1693845947a_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','140','002','Tennessee','H7849_25_1693847439_C','2026_NR_SAR_OrgReplacement_H7849_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H7849','141','000','Oklahoma ','H7849_25_1693851989_C','2026_NR_SAR_OrgReplacement_H7849_Oklahoma');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H9725','008','000','Virginia','H9725_25_1693864598_C','2026_NR_SAR_OrgReplacement_H9725');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0439','003','001','Georgia','H0439_25_1693865841_C','2026_NR_SAR_OrgReplacement_H0439');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0439','003','002','Georgia','H0439_25_1693868697_C','2026_NR_SAR_OrgReplacement_H0439');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0439','006','000','Georgia','H0439_25_1693870065_C','2026_NR_SAR_OrgReplacement_H0439');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H0672','005','000','New Mexico','H0672_25_1695285675_C','2026_NR_SAR_OrgReplacement_H0672_New Mexico');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H2108','029','000','Delaware','H2108_25_1695286598_C','2026_NR_SAR_OrgReplacement_H2108_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H2108','042','001','Delaware','H2108_25_1695286954_C','2026_NR_SAR_OrgReplacement_H2108_Delaware');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H4513','009','000','Texas','H4513_25_1695287765_C','2026_NR_SAR_OrgReplacement_H4513_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H4513','033','000','Tennessee','H4513_25_1695288922_C','2026_NR_SAR_OrgReplacement_H4513_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','036','000','Tennessee','H4513_25_1695289993_C','2026_NR_SAR_OrgReplacement_H4513_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H4513','039','000','Arkansas','H4513_25_1695291705_C','2026_NR_SAR_OrgReplacement_H4513_Arkansas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','046','001','Alabama','H4513_25_1695292508_C','2026_NR_SAR_OrgReplacement_H4513_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','046','002','Alabama','H4513_25_1695296631_C','2026_NR_SAR_OrgReplacement_H4513_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','049','005','Tennessee','H4513_25_1695297079_C','2026_NR_SAR_OrgReplacement_H4513_Tennessee');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','052','000','Arkansas','H4513_25_1695299124_C','2026_NR_SAR_OrgReplacement_H4513_Arkansas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H4513','060','001','Texas','H4513_25_1695301221_C','2026_NR_SAR_OrgReplacement_H4513_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','061','001','Texas','H4513_25_1695302034_C','2026_NR_SAR_OrgReplacement_H4513_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MA-Only  ','H4513','078','000','Arkansas','H4513_25_1695322388_C','2026_NR_SAR_OrgReplacement_H4513_Arkansas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','DSNP','H4513','081','000','Arkansas','H4513_25_1695323222_C','2026_NR_SAR_OrgReplacement_H4513_Arkansas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','083','001','Texas','H4513_25_1695324897_C','2026_NR_SAR_OrgReplacement_H4513_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','085','000','Illinois','H4513_25_1695327762_C','2026_NR_SAR_OrgReplacement_H4513_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','086','000','Illinois','H4513_25_1695420954_C','2026_NR_SAR_OrgReplacement_H4513_Illinois');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','088','000','Alabama','H4513_25_1695427293_C','2026_NR_SAR_OrgReplacement_H4513_Alabama');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H4513','091','000','Texas','H4513_25_1695428402_C','2026_NR_SAR_OrgReplacement_H4513_Texas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','024','000','Missouri','H7849_25_1695429694_C','2026_NR_SAR_OrgReplacement_H7849_Missouri');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H7849','102','003','Arkansas','H7849_25_1695430602_C','2026_NR_SAR_OrgReplacement_H7849_Arkansas');
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES('2025','MAPD','H9460','001','000','Missouri','H9460_25_1695431463_C','2026_NR_SAR_OrgReplacement_H9460');
+
+
+/*
+CREATE MULTISET VOLATILE TABLE VT_SAR_NR_BOM_2026
+(
+State VARCHAR(64) CHARACTER SET UNICODE,
+Contract VARCHAR(64) CHARACTER SET UNICODE,
+PBP VARCHAR(64) CHARACTER SET UNICODE,
+Segment VARCHAR(64) CHARACTER SET UNICODE,
+PLANReplacementID VARCHAR(64) CHARACTER SET UNICODE,
+RecordType VARCHAR(64) CHARACTER SET UNICODE
+) ON COMMIT PRESERVE ROWS;
+*/
+
 --2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD.csv
 --Extract SQL work in progress
 SELECT
-MBR.MemberID as "Member ID"
+MBR.MEMCODNUM --N/A
+,MBR.MemberID as "Member ID"
+,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+,MBR.TermDate as TermDate --N/A
+,MBRS.Description as CurrentStatus --N/A 
+,DMG.OECCounty --N/A
+,DMG.SCC1 as DMGSCC1 --N/A
+,DMG.SCC2 as DMGSCC2 --N/A
 ,DMG.FirstName as FirstName
 ,DMG.LastName as LastName
-,MailADDR.Address1 as Addr1
-,MailADDR.Address2 as Addr2
-,MailADDR.City as City
-,MailADDR.State as State
-,MailADDR.Zip as Zip
+,PhyADDR.Address1 as PhyAddr1 --N/A
+,PhyADDR.Address2 as PhyAddr2 --N/A
+,PhyADDR.City as PhyCity --N/A
+,PhyADDR.State as PhyState --N/A
+,CASE 
+  WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+  ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+ END as PhyZip --N/A
+,MailADDR.Address1 as MailAddr1
+,MailADDR.Address2 as MailAddr2
+,MailADDR.City as MailCity
+,MailADDR.State as MailState
+,CASE 
+  WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+  ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+ END as MailZip
 ,MBR.PlanID as CContract
 ,MBR.PBP as CPBP
-,COALESCE(MBR.SegmentID,'000') as CSegment
-,ProductName as "Plan Name"
+,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+,PLN.ProductName as "Plan Name"
 ,SC.SCC_CODE as "SCC Code"
 ,DMG."Language" as LanguageText
-,CASE
-               WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
-               WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
-               WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
-               WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
-               ELSE ''
-               END AS "Alternate Format"
+,CASE 
+	WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+	WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+	WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+	WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+	ELSE '' 
+	END AS "Alternate Format"
 ,SC.CountyName as County
 ,PhyADDR.State as PhysicalState
+,SC.State as CountyState 
 ,MBOM.State as "Plan State"
 ,MemberID||'_SAR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
 ,MBOM.RecordType as "Record Type"
 ,MBOM.LetterMaterialID as "Material ID"
 ,MBOM.PLANReplacementID as "Plan Replacement ID"
- 
+
 FROM (
-SELECT
-               MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY
-FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
-WHERE SRC_DATA_KEY = '210'
-QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
-JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
-ON        MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY
-AND MBR.MemCodNum = DMG.MemCodNum
-AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
-JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
-ON MBR.PlanID = PLN.PlanID
-AND MBR.PBP = PLN.PBPID
-LEFT JOIN (
-SELECT
-               MemCodNum, Address1, Address2, City, State, Zip, SRC_DATA_KEY
-FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
-WHERE AddressUse = '1'
-QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR
-ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY
-AND MBR.MemCodNum = PhyADDR.MemCodNum
-LEFT JOIN (
-SELECT
-               MemCodNum, Address1, Address2, City, State, Zip, SRC_DATA_KEY
-FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
-WHERE AddressUse = '2'
-QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR
-ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY
-AND MBR.MemCodNum = MailADDR.MemCodNum
-JOIN VT_SAR_PLAN SAR
-ON MBR.PlanID = SAR.Contract
-AND MBR.PBP = SAR.PBP
-AND DMG.SCC1 = SAR.ServiceAreaCountyCode
-LEFT JOIN VT_SAR_NR_BOM_2026 MBOM
-ON MBR.PlanID = MBOM.Contract
-AND MBR.PBP = MBOM.PBP
-AND COALESCE(MBR.SegmentID,'000') = MBOM.Segment
-LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
-ON DMG.SCC1 = SC.SCC_CODE;
+	SELECT
+	MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+	FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+	WHERE SRC_DATA_KEY = '210'
+	and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+	ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+	AND MBR.MemCodNum = DMG.MemCodNum
+	--AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+	ON MBR.MemberStatus = MBRS.Status
+	--AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+	
+	LEFT JOIN 
+	(
+		Select 
+				tbe.PlanID,
+				tbe.MemCodNum,
+				tbe.HIC AS SpanMBINumber,
+				tbe.SPANTYPE AS SpanType,
+				tbe."Value" AS SpanValue,
+				CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+				CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+				CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+				CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+				Tbt.DateCreated AS TR_CREATE_DATE,
+				--SegmentId population preference: SEGC, SEGD, Transactions, Default000
+				COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+				SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                   FROM (
+                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                          a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+               LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                     ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                        ON tbt.MemCodNum = tbe.MemCodNum
+                                          AND tbt.PlanID = tbe.PlanID
+                                          AND tbt.PBPID = tbe."Value"
+                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                          AND tbt.TransStatus IN (5)
+                                          WHERE tbe.SpanType = 'PBP'
+                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                          ) EAMSGMNT
+										  
+	ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+	AND MBR.PlanID = EAMSGMNT.PlanID
+	AND MBR.PBP = EAMSGMNT.SpanValue
+
+	JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+	ON MBR.PlanID = PLN.PlanID
+	AND MBR.PBP = PLN.PBPID
+
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '1'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+	ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = PhyADDR.MemCodNum
+
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '2'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+	ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = MailADDR.MemCodNum
+
+	JOIN VT_SAR_PLAN SAR
+	ON MBR.PlanID = SAR.Contract
+	AND MBR.PBP = SAR.PBP
+	AND CSegment = SAR.Segment
+	AND DMG.SCC1 = SAR.ServiceAreaCountyCode
+
+	LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+	ON DMG.SCC1 = SC.SCC_CODE
+	
+	LEFT JOIN 
+	(
+		SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+	ON SC.State = STREF.STATE_ABBREVIATED_NAME 
+
+	LEFT JOIN VT_SAR_NR_BOM_2026 MBOM
+	ON MBR.PlanID = MBOM.Contract
+	AND MBR.PBP = MBOM.PBP
+	AND CSegment = MBOM.Segment
+	AND STREF.STATE_NAME = MBOM.State;
+
+
+
+
+	Business Requirements
+1.	Vendor file
+1.1.	Format 
+1.1.1.	CSV
+1.1.2.	Tab delimited format
+1.1.3.	File per contract & PBP combination is required
+1.2.	File Naming convention
+1.2.1.	2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD
+1.2.1.1.	The date represents the date the file was generated
+1.2.1.2.	If Segment is null/blank or 000 populate as 000.
+1.3.	Business Rules
+1.3.1.	One file should be created for each contract & PBP combination for mailing purposes. 
+1.3.1.1.	Templates are different per service area which necessitates different mail files. 
+1.3.2.	Return Mail address should be PO BOX 1002, Nashville, TN 37202
+1.3.3.	EAM data tables are the source of truth for the data. 
+1.3.4.	A row should return for any member that is active at the time of the data generation for mailing and without a future disenrollment date. 
+1.3.5.	The county information should be based on the customer’s physical address and not any county associated to a mailing address. 
+1.3.6.	If any record is missing required data, it should still be placed on a separate file but named _error in same format as mailing for manual correction and error with what is missing. 
+1.3.7.	This can include EGWP plans but should be confirmed yearly during bid processes by business. The PBP starts with an ‘8’
+1.3.7.1.	For 2026, no EGWP plans impacted by SAR.
+1.3.8.	Files should be generated daily after initial file for any members that newly enrolled into a plan fitting the SAR guidance so a letter can be sent. 
+1.3.8.1.	New enrollments should be identified as new enrollments or new members as of get date for the current year. 
+1.3.9.	Include members where the physical state and county code is listed below for only the contract and PBPs listed below. 
+SAR Plan
+Contract 	PBP 	Segment	State	Service Area County Name	Service Area County Code	Membership Count
+H0439	003	001	GA	Butts 	11160	
+H0439	003	001	GA	Greene 	11520	
+H0439	003	001	GA	Morgan	11771	
+H0439	003	001	GA	Oconee	11800	
+H0439	003	002	GA	Banks	11040	
+H0439	003	002	GA	Chattooga	11240	
+H0439	003	002	GA	Dawson	11350	
+H0439	003	002	GA	Fayette	11451	
+H0439	003	002	GA	White	11963	
+H0439	006	000	GA	Cobb	11290	
+H0439	006	000	GA	DeKalb	11370	
+H0672	005	000	NM	San Juan	32220	
+H2108	029	000	DE	Kent	08000	
+H2108	042	001	DE	Kent	08000	
+H4513	009	000	TX	Newton	45821	
+H4513	033	000	TN	Lake	44470	
+H4513	033	000	TN	Obion	44650	
+H4513	036	000	TN	Bedford	44010	
+H4513	036	000	TN	Grundy	44300	
+H4513	036	000	TN	Haywood	44370	
+H4513	039	000	AR	Crawford	04160	
+H4513	046	001	AL	Lowndes	01420	
+H4513	046	002	AL	Cherokee	01090	
+H4513	046	002	AL	Colbert	01160	
+H4513	046	002	AL	Lawrence	01390	
+H4513	049	005	TN	Lake	44470	
+H4513	049	005	TN	Obion	44650	
+H4513	052	000	AR	Crawford	04160	
+H4513	060	001	TX	Newton	45821	
+H4513	061	001	TX	Newton	45821	
+H4513	078	000	AR	Crawford	04160	
+H4513	081	000	AR	Crawford	04160	
+H4513	083	001	TX	Newton	45821	
+H4513	085	000	IL	DeKalb	14170	
+H4513	086	000	IL	DeKalb	14170	
+H4513	088	000	AL	Tuscaloosa	01620	
+H4513	091	000	TX	Newton	45821	
+H7849	024	000	MO	Caldwell	26120	
+H7849	102	003	AR	Crawford	04160	
+H7849	124	001	DE	Kent	08000	
+H7849	124	001	DE	New Castle	08010	
+H7849	124	001	DE	Sussex	08020	
+H9460	001	000	MO	Caldwell	26120	
+						
+
+1.3.10.	Exclude any members not in the above table per the criteria in the business rules.  
+
+1.4.	Data Fields
+Name of field	Format	Description	Required Y/N	Example	Source Field	Member Specific field	Vendor Specifications
+Member ID	Alpha, alpha numeric, may include special character (*)	Cardholder ID unique to the member	Y			Y	Populate from file
+FirstName		Member First Name	Y			Y	Populate from file
+LastName		Member Last Name	Y			Y	Populate from file
+Addr1		Member Mailing 1st row address	Y			Y	Populate from file
+Addr2		Member Mailing address 2nd or 3rd row – combine if 3 rows (if one is available)	N			Y	Populate from file – if populated
+City		Member mailing address city	Y			Y	Populate from file
+State		Member mailing address state	Y			Y	Populate from file
+Zip		Member mailing address zip code	Y	37128
+37128-1234		Y	Populate from file
+CContract	Hnnnn
+5 char	Member’s current year contract	Y	H0354		Y	
+CPBP	3 char	Current year PBP	Y	001	Does not include segment information	Y	
+CSegment	3 char	Current year segment (if null/blank populate 000)	Y	001			
+Plan Name		Current year plan name	Y	Cigna HealthCare Total Care (HMO-DSNP)			Populate from file
+SCC Code	Numeric
+nnnnn	SCC code 	Y	45020			
+Language		Member’s language preference (default to English if blank or not Spanish	Y	ENGLISH OR SPANISH		Y	
+Alternate Format		Member’s preferred format (like braille, audio, large print)	N		Numeric code in Facets – need to understand in EAM	Y	Ignore
+County		Member’s county for physical address	N – Populate if available	Davidson	SBRT_RT_CNTY	Y	
+PhysicalState		Member’s state for physical address as the abbreviation that will drive variable data at the vendor	Y	TN		Y	
+Plan State		State the plan is offered in	Y	Tennessee	Populate from SAR_NR_BOM_2026 using contract, PBP, and Segment	May contain more than one state	Use to populate template and to match to state agency crosswalk to populate template
+Record ID		Unique ID for each record	Y		Use MemberID_SAR_YYYYMMDD to create a unique record ID		Use on mail date file
+Record Type		Denotes the type of record	Y		SAR_MA
+SAR_MAPD
+SAR_DSNP
+Developer to match based on contract, PBP, and segment		Use to determine template selection
+SAR_MA = HMO and PPO MA only SAR NR letter template
+SAR_MAPD = HMO and PPO MAPD SAR NR letter template
+SAR_DSNP = DSNP SAR NR Letter template
+
+Material ID		Denotes the Material ID in the footer 	Y		Populate from SAR_NR_BOM_2026 using contract, PBP, and Segment		Populate from file
+Plan Replacement ID		Denotes the insert that the vendor will include	Y		Populate from SAR_NR_BOM_2026 using contract, PBP, and Segment		Use to determine table insert
+
+
+
+Need to split the output files based on contract and PBP values and also need to create summary files and missing info files accordingly.
