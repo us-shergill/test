@@ -1,89 +1,141 @@
-Certainly. Here's the information in plain text format that you can easily copy and use:
+Perfect. Let’s assume for now that **Segment is still required**, and you're going to:
+
+> Generate SAR mailing files (one per Contract + PBP + Segment), summary files, and error files — in tab-delimited CSV format — using Teradata as source.
 
 ---
 
-**Immediate action items owned by Titans**
+# ✅ **Step-by-Step Plan to Generate SAR Files**
+
+This plan includes:
+
+* SQL logic in Teradata
+* Output splitting and export
+* Summary and error file generation
+* File naming conventions
+* Optional scheduling
 
 ---
 
-**1. Analysis of existing AAH and listing out the columns that we use for SGD reporting**
+## 🔹 STEP 1: **Create Required Lookup Tables (Temporary)**
 
-* AAH data is derived through multiple stages: `AHier`, `AHier_PDCR_BY_AFF_DT`, and `AHier_PDCR_BY_END_DT`.
-* These are further transformed into `BHier` and finally `CHier`, which is the core output used in downstream reporting.
-* The `CHier` table contains fields used in SGD reporting such as:
+Run this in Teradata first:
 
-  * AGENT\_ID
-  * AGENT\_PDCR\_CD
-  * SIRCON\_AGENT\_ID
-  * AGENT\_NAME
-  * AGENT\_LEVEL
-  * AGENT\_EFFECTIVE\_DATE
-  * AGREEMENT\_EFFECTIVE\_DATE
-  * AGREEMENT\_END\_DATE
-  * Role and metadata fields for each tier: PBE, GA, MGA, SGA, SGA2, FMO, RFMO, NFMO, AFMO
-* These columns are likely loaded into GR\_MEMBER and Submitted Apps.
-* Coordinate with data modelers and sprinters to ensure these columns (especially Agent NPN and tier hierarchy) are supported in the new system (EVOLVE).
+```sql
+-- Drop and create SAR Plan inclusion list
+CREATE MULTISET VOLATILE TABLE VT_SAR_PLAN (...) ON COMMIT PRESERVE ROWS;
+INSERT INTO VT_SAR_PLAN VALUES (...);  -- Your SAR county list
+
+-- Drop and create BOM mapping
+CREATE MULTISET VOLATILE TABLE VT_SAR_NR_BOM_2026 (...) ON COMMIT PRESERVE ROWS;
+INSERT INTO VT_SAR_NR_BOM_2026 VALUES (...);  -- Your Material/Replacement mapping
+```
 
 ---
 
-**2. Identify impacted code and steps to enhance**
+## 🔹 STEP 2: **Run Final SAR Detail SQL in Teradata**
 
-**Impacted tables:**
+This is the fully built query:
 
-* temp\_BROKER\_SIRCON\_AGENT
-* AHier
-* AHier\_PDCR\_BY\_AFF\_DT
-* AHier\_PDCR\_BY\_END\_DT
-* BHier
-* CHier
-* EEChan, EEChan2, DerChan
-* REPORTING\_T.LU\_TOPLINE\_CHANNEL
+* Applies all SAR filters (contract, PBP, county)
+* Derives `Segment` using span/transaction logic
+* Joins with `VT_SAR_PLAN` and `VT_SAR_NR_BOM_2026`
+* Outputs **one row per eligible member**
 
-**Impacted procedures:**
+💡 **Export this query’s result to CSV file** (you can use BTEQ, TPT, or Teradata Studio).
 
-* PROC\_FOR\_AGENT\_AGREEMENT\_HISTORY
-* Any ETL procedures or views that consume data from CHier or BHier
+Save as:
 
-**Steps to enhance:**
-
-* Refactor logic in the stored procedure and downstream processes to align with EVOLVE data model.
-* Ensure all downstream processes are modified to consume the new hierarchy structure and identifiers.
+```
+full_sar_output.csv
+```
 
 ---
 
-**3. Impact of moving away from SIRCON agent identifiers to Agent NPN (National Producer Number) from new system (EVOLVE)**
+## 🔹 STEP 3: **Load Output into Pandas (Python)**
 
-**Where SIRCON\_AGENT\_ID is currently used:**
+```python
+import pandas as pd
+from datetime import datetime
 
-* It is used throughout the procedure in tables: temp\_BROKER\_SIRCON\_AGENT, AHier, BHier, CHier
-* Used in joins between hierarchy levels and as the key to identify agents
-* Referenced in downstream matching logic such as MBR\_SALES\_AGT\_DIM in datamart\_member\_v
+df = pd.read_csv("full_sar_output.csv")
 
-**Steps required:**
-
-* Replace all joins on SIRCON\_AGENT\_ID with joins on Agent\_NPN
-* Ensure Agent\_NPN is selected and propagated in all intermediary and final output tables like BHier and CHier
-* Modify CHier output schema to expose Agent\_NPN as the external-facing identifier
-* Verify all procedures, reports, and datamarts that use SIRCON\_AGENT\_ID and update accordingly
-
-**Examples of required changes:**
-
-* In joins like:
-  `join MBR_SALES_AGT_DIM on agent.SIRCON_AGENT_ID = ...`
-  change to:
-  `join MBR_SALES_AGT_DIM on agent.Agent_NPN = ...`
-
-**List of impacted procedures:**
-
-* PROC\_FOR\_AGENT\_AGREEMENT\_HISTORY
-* Any procedure/view that joins AAH data with external dimensions using SIRCON\_AGENT\_ID
-
-**Changes to be done:**
-
-* Refactor joins, selections, and groupings to use Agent\_NPN
-* Update data contracts for downstream consumers (GR\_MEMBER, datamart\_member\_v, Submitted Apps)
-* Validate test coverage for all code paths that previously used SIRCON\_AGENT\_ID
+# Normalize CSegment
+df['CSegment'] = df['CSegment'].fillna('000').replace('', '000')
+today_str = datetime.today().strftime('%Y%m%d')
+```
 
 ---
 
-Let me know if you want this in markdown or Word format.
+## 🔹 STEP 4: **Split into One File per Contract + PBP + Segment**
+
+```python
+for (contract, pbp, segment), group in df.groupby(['CContract', 'CPBP', 'CSegment']):
+    filename = f"2026SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{today_str}.txt"
+    group.to_csv(filename, sep="\t", index=False)
+```
+
+✅ Output: one file per Contract + PBP + Segment
+
+---
+
+## 🔹 STEP 5: **Create Summary File**
+
+```python
+summary_df = df.groupby(['CContract', 'CPBP', 'CSegment']).size().reset_index(name='MemberCount')
+summary_filename = f"2026SAR_Mailing_Summary_{today_str}.txt"
+summary_df.to_csv(summary_filename, sep="\t", index=False)
+```
+
+---
+
+## 🔹 STEP 6: **Create Error File for Missing Required Fields**
+
+```python
+required_cols = [
+    'Member ID', 'FirstName', 'LastName', 'Addr1', 'City', 'State', 'Zip',
+    'CContract', 'CPBP', 'CSegment', 'Plan Name', 'LanguageText',
+    'Plan State', 'Record ID', 'Record Type', 'Material ID', 'Plan Replacement ID'
+]
+
+error_df = df[df[required_cols].isnull().any(axis=1)]
+
+if not error_df.empty:
+    error_filename = f"2026SAR_Mailing_Fulfillment_error_{today_str}.txt"
+    error_df.to_csv(error_filename, sep="\t", index=False)
+```
+
+---
+
+## 🔹 STEP 7: **Daily Run Strategy (Optional)**
+
+You can automate this:
+
+* **Databricks notebook**: SQL + file generation in one flow
+* **Airflow DAG**: Teradata extraction + Python tasks
+* **Scheduled Python script**: via cron or Windows Task Scheduler
+
+---
+
+## 🔹 STEP 8: **File Delivery (Optional)**
+
+* Send to vendor SFTP
+* Upload to Azure Blob or AWS S3
+* Email alerts for errors
+
+---
+
+## ✅ Files Generated Per Run
+
+| File Type       | Format               | File Naming Example                                      |
+| --------------- | -------------------- | -------------------------------------------------------- |
+| SAR Detail File | .txt (tab-delimited) | `2026SAR_Mailing_Fulfillment_H4513_003_000_20250715.txt` |
+| Summary File    | .txt                 | `2026SAR_Mailing_Summary_20250715.txt`                   |
+| Error File      | .txt                 | `2026SAR_Mailing_Fulfillment_error_20250715.txt`         |
+
+---
+
+Let me know:
+
+* If you want me to generate the full Python script from these steps
+* If you want this adapted for `Contract + PBP` only (no Segment) later
+* Or want help generating the BTEQ export script from Teradata
