@@ -12,3 +12,755 @@
                               - Python target path to business location (BRD)
                               - SFTP/B2B???
                               - S3?
+
+
+import logging
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.models import Variable
+from airflow.operators.bash import BashOperator
+from airflow.operators.email_operator import EmailOperator
+from oss_airflow_integrations.snow import snow_integrations
+from airflow.utils.email import send_email
+from airflow.exceptions import AirflowNotFoundException
+
+import oss_etl_library.airflow as oss
+
+logger = logging.getLogger(__name__)
+
+# Variables
+dag_id = 'OSSTDV_Ingest_CSB_MAIL_FILE_SALES_INCR'
+
+dag_config = Variable.get(dag_id, deserialize_json=True)
+
+py_ssh_conn_var = dag_config['py_ssh_conn_var']
+td_conn_var = dag_config['td_conn_var']
+load_env = dag_config['load_env']
+schedule_cron = dag_config['schedule_interval']
+email_recipient = dag_config['email_recipient']
+etl_procs_grp_ids = dag_config['etl_procs_grp_ids']
+indirect_file_path = dag_config['indirect_file_path']
+td_conn_id = dag_config['td_conn_var']
+retry_interval = dag_config["smb_sensor_retry"]
+python_server_file_path = dag_config['python_server_file_path']
+python_server_conn_var_name = dag_config['smb_connection_var']
+curr_date = datetime.now()
+
+# Email vars
+success_email_body = f"""
+{dag_id} Data successfully loaded for date: {curr_date}
+"""
+fail_email_body = f"""
+{dag_id} Failed while loading Data for date: {curr_date}
+"""
+
+def createTicket(context):
+    assignment_group = "D&AE - EDE Govt Sales Marketing & Growth"
+    snow_data = snow_integrations.create_incident(context,assignment_group)
+
+    html_content =fail_email_body
+    subject = f"Airflow {load_env} Failure: {dag_id} DAG"
+    send_email(to=email_recipient, subject=subject, html_content=html_content)
+    return
+
+default_args = {
+    'owner': 'oss',
+    'description': "Dag to load the CSB MAIL FILE C1 Data",
+    'depends_on_past': False,
+    'start_date': datetime(2017, 8, 25),
+    'email_on_failure': True,
+    'email_on_retry': True,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+    'on_failure_callback': createTicket
+}
+
+def checking_for_file(file_server_conn_id):
+    """
+    Checking for File to Load
+    """
+    global_vars = {}
+    global_vars = oss.airflow_connect.RemoteConnection.smb_establish_conn(file_server_conn_id, global_vars)
+    client = global_vars["SMB_CLIENT"]
+    home_dir = global_vars["SRC_FILE_HOME_DIR"]
+
+    files = client.listdir(f"{home_dir}\\{indirect_file_path}")
+    print("files", files)
+    csb_files = [file for file in files if 'nds0001i.26833.C383' and '.txt' in file]
+    
+    if len(csb_files) > 0:
+        print("Following files will be loaded :")
+        for file in csb_files:
+            logger.info(f"file name: {file}")
+    else:
+        raise AirflowNotFoundException("No compatible file found")
+    
+
+def load_file_to_db(db_conn_id, py_conn_id, file_server_conn_id, etl_procs_grp_ids):
+    """
+    Perform File to Database Load
+    """
+    
+    for etl_procs_grp_id in etl_procs_grp_ids:
+        global_vars = {}
+        global_vars = oss.airflow_connect.RemoteConnection.ssh_establish_conn(py_conn_id, global_vars)
+        global_vars = oss.airflow_connect.RemoteConnection.smb_establish_conn(file_server_conn_id, global_vars)
+       
+        logger.info(f"etl_procs_grp_id: {etl_procs_grp_id}")
+        global_vars["ETL_PROCS_GRP_ID"] = etl_procs_grp_id
+
+        config_data = oss.airflow_connect.DatabaseConnection.set_config_file(db_conn_id)
+
+        td_conn, global_vars, source_dict = oss.Src_FileLoad.Wrapper_FileToCoreLoad(db_conn_id, etl_procs_grp_id, config_data, global_vars)
+
+
+def archive_file(file_server_conn_id):
+    '''
+    Archive the csv file to the nested Archive folder
+    '''
+    global_vars = {}
+    # global_vars["ETL_PROCS_GRP_ID"] = etl_procs_grp_id
+    global_vars = oss.airflow_connect.RemoteConnection.smb_establish_conn(file_server_conn_id, global_vars)
+
+    client = global_vars["SMB_CLIENT"]
+    home_dir = global_vars["SRC_FILE_HOME_DIR"]
+
+    for file_info in client.scandir(f"{home_dir}\\{indirect_file_path}"):
+        if file_info.is_file() and file_info.name.endswith('.txt') and 'nds0001i.26833.C383' in file_info.name:
+            file_path = f"\{home_dir}\\{indirect_file_path}{file_info.name}"
+            archive_file_path = f"\{home_dir}\\{indirect_file_path}Archive\\{file_info.name}"
+            print(f"file_path: {file_path}")
+            print(f"archive_file_path: {archive_file_path}")
+            dstfile = client.open_file(archive_file_path, mode="w")
+            with client.open_file(file_path) as srcfile:
+                dstfile.write(srcfile.read())
+            dstfile.close()
+            srcfile.close()
+            client.remove(file_path)
+
+
+with DAG(
+    dag_id=dag_id,
+    default_args=default_args,
+    schedule_interval=schedule_cron,
+    catchup=False,
+    max_active_runs=1,
+    tags=['oss', 'dae_titans', 'sales']) as dag:
+
+    starting_workflow = BashOperator(
+        task_id="starting_workflow",
+        bash_command="echo Starting Workflow!",
+        dag=dag
+    )
+
+    check_for_file = PythonOperator(
+        task_id='check_for_file',
+        dag=dag,
+        python_callable=checking_for_file, #defined locally
+        op_kwargs={"file_server_conn_id": python_server_conn_var_name}
+    )
+
+    td_file_to_core_load = PythonOperator(
+        task_id='td_file_to_core_load',
+        dag=dag,
+        python_callable=load_file_to_db, #defined locally
+        op_kwargs={"db_conn_id": td_conn_var,
+                   "py_conn_id": py_ssh_conn_var,
+                   "file_server_conn_id": python_server_conn_var_name,
+                   "etl_procs_grp_ids": etl_procs_grp_ids}
+    )
+
+    archive_the_file = PythonOperator(
+        task_id="archive_the_file",
+        dag=dag,
+        python_callable=archive_file,
+        op_kwargs={"file_server_conn_id": python_server_conn_var_name}
+    )
+
+    success_email = EmailOperator(
+        task_id='success_email',
+        to=email_recipient,
+        subject=f"Airflow {load_env} Success: {dag_id} DAG",
+        html_content=success_email_body,
+        trigger_rule='all_success',
+        dag=dag
+    )
+
+    failure_email = EmailOperator(
+        task_id='failure_email',
+        to=email_recipient,
+        subject=f"Airflow {load_env} Failure: {dag_id} DAG",
+        html_content=fail_email_body,
+        trigger_rule='one_failed',
+        dag=dag
+    ) 
+
+starting_workflow >> check_for_file >> td_file_to_core_load >> archive_the_file >> [success_email, failure_email]
+
+
+
+--------------------------
+import airflow
+import os
+import shutil
+import smbclient
+import zipfile
+import pathlib
+import glob
+import json
+import pandas as pd
+import numpy as np
+
+from airflow import DAG
+from airflow.configuration import conf
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+from airflow.hooks.base_hook import BaseHook
+from airflow_connect import *
+from airflow.models import Variable
+from airflow.operators.bash import BashOperator
+from airflow.operators.dummy import DummyOperator
+from airflow.operators.email_operator import EmailOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.utils.email import send_mime_email
+from dags.SMBSensor import SMBSensor
+from zipfile import ZipFile
+from sqlalchemy import create_engine
+
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from email.mime.text import MIMEText
+from oss_airflow_integrations.snow import snow_integrations
+
+from typing import Union, List
+
+import oss_etl_library_acumen as oss
+
+logger = logging.getLogger(__name__)
+
+# Variables
+dag_id = 'acumen_load_oss'
+
+dag_config = Variable.get('acumen_config1_var', deserialize_json=True)
+
+wdc_comp_oper_nas_var = dag_config['wdc_comp_oper_nas_var']
+load_env = dag_config['load_env']
+schedule_cron = dag_config['schedule_interval']
+unzip_file_path = dag_config['unzip_file_path']
+comp_oper_file_path = dag_config['comp_oper_file_path']
+acumen_input_path = dag_config['acumen_input_path']
+acumen_incoming_path = dag_config['acumen_incoming_path']
+acumen_archive_path = dag_config['acumen_archive_path']
+curr_date = datetime.now()
+python_server_file_path = dag_config['python_server_file_path']
+TD_Server = dag_config['TD_Server']
+Load_env = dag_config['load_env']
+EMAIL_SENDER = conf.get("smtp", "SMTP_MAIL_FROM")
+EMAIL_RECIPIENT = dag_config['email_recipient']
+assignment_group = dag_config['assignment_group']
+
+
+# Python server Connection Variables
+python_server_conn_var_name = dag_config['python_server_conn_var_name']
+python_server_connection = BaseHook.get_connection(python_server_conn_var_name)
+python_server = python_server_connection.host
+python_server_uid = python_server_connection.login
+python_server_pwd = python_server_connection.password
+
+#COMP_OPER connection variables
+conn_id = "comp_oper_creds"
+conn = BaseHook.get_connection(conn_id) 
+user = conn.login
+passwd = conn.password
+extra = conn.extra_dejson
+host = conn.host
+today = datetime.now()
+
+if Load_env == 'DEV':
+    td_env = '_DEV'
+elif Load_env == 'QA':
+    td_env = '_QA'
+elif Load_env == 'INT':
+    td_env = 'INT'
+else :
+    td_env = ''
+
+#acumen_input_path_var = Variable.get("acumen_input_path_var")
+#acumen_incoming_path_var = Variable.get("acumen_incoming_path_var")
+
+# Email vars
+#success_email_body = f"""
+#{dag_id} Data successfully loaded for date: {curr_date}
+#"""
+#fail_email_body = f"""
+#{dag_id} Failed while loading Data for date: {curr_date}
+#"""
+
+default_args = {
+    'owner': 'oss',
+	'description': f"Dag to load the data into Acumen tables",
+    'depends_on_past': False,
+    'start_date': datetime(2017, 11, 14),
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 0,
+    'retry_delay': timedelta(minutes=5),
+}
+
+def failure_alert_ticket(context):
+    snow_data = snow_integrations.create_incident(context,assignment_group)
+    return
+
+default_args['on_failure_callback'] = failure_alert_ticket
+
+# Define a function to extract zip files recursively
+def extract_zip_files(acumen_input_path, acumen_incoming_path):
+# Set up connection to the NAS using smbclient
+    smbclient.register_session(host, username=user, password=passwd)
+    files = smbclient.listdir(acumen_input_path)
+    files = [file for file in files if '.zip' in file]
+    print("Input Path :", acumen_input_path)
+    print("Zip Files :", files)
+
+    temp = os.path.join(os.environ['HOME'],'temp')
+    try:
+        os.mkdir(temp)
+    except Exception as e:
+        print("Folder Exists : ", e)
+    print("Temp dir :", temp)
+
+    # specifying the zip file name
+    for i in files:
+        local_file = os.path.join(temp, i)
+        #Downloading the Zip File to local server
+        with smbclient.open_file(os.path.join(acumen_input_path, i), mode="rb") as fr:
+            fw = open(local_file, 'wb')
+            fw.write(fr.read())
+            fw.close()
+
+        # Skip 0B files
+        if os.path.getsize(local_file) == 0:
+            continue
+
+        print("Local File :", local_file)
+        print("Level 1: Extracting zip file : ", local_file)
+        level1_path = os.path.join(temp, i[:-4])
+        print("Unzip file location :", level1_path)
+        with ZipFile(local_file, 'r') as zip:
+            zip.extractall(level1_path)
+
+        #Level 2: Zip File Extraction
+        files2 = os.listdir(level1_path)
+        zfiles2 = [file for file in files2 if '.zip' in file]
+        print("Level 2 Zip Files : ", zfiles2)
+        for j in zfiles2:
+            file_name2 = os.path.join(level1_path, j)
+            #print(file_name2)
+            print("Level 2: Extracting zip file -", file_name2)
+            with ZipFile(file_name2, 'r') as zip2:
+                #zip2.printdir()
+                zip2.extractall(level1_path)
+
+        #Move CSV Files to Destination Path
+        csv_files = os.path.join(level1_path, "*.csv")
+        print("Moving CSV files to path : ", acumen_incoming_path)
+        files = glob.glob(csv_files)
+        for filename in files:
+            nas_file = os.path.join(acumen_incoming_path, filename.split('/')[-1:][0])
+            print("CSV file in NAS Drive :", nas_file)
+            with smbclient.open_file(nas_file, mode="w") as fd:
+                fd.write(open(filename).read())
+                fd.close()
+
+    # Remove the temp directory which is created for unzip process
+    print("Deleting temp director :", temp)
+    shutil.rmtree(temp)
+
+# Define function to Archive files after processing
+def archive_zip_files(acumen_input_path, acumen_incoming_path,acumen_archive_path):    
+    smbclient.register_session(host, username=user, password=passwd)
+    files = smbclient.listdir(acumen_incoming_path)
+    for file in files:
+        smbclient.remove(acumen_incoming_path+file)
+    zipfiles = smbclient.listdir(acumen_input_path)
+    for file in zipfiles:
+        FileNameLength=file.find('.')
+        FileDatetime = today.strftime("%m%d%Y%H%M%S")
+        src_file_loc = os.path.join(acumen_input_path, file)
+        arc_file_loc = os.path.join(acumen_archive_path, file[:FileNameLength] +"_"+ FileDatetime +".zip")
+        smbclient.rename(src_file_loc,arc_file_loc)
+        
+def archive_zip_files_Pythonserver(acumen_input_path):
+    smbclient.ClientConfig(username=user, password=passwd)
+    file_list = smbclient.listdir(acumen_input_path)
+    print(file_list)
+
+    # Retrieve all matched files from Comp Oper and copy to python server
+    for x in file_list:
+        print('Copy started for file: ' + x)
+
+        file_contents = None
+        with smbclient.open_file(acumen_input_path + x, mode='rb') as fd:
+            file_contents = fd.read()
+
+        # Copy file from Comp Oper to python
+        print("python path:")
+        print(os.path.join(python_server, python_server_file_path, os.path.basename(x)))
+        print(f"{python_server}/{python_server_file_path}/{x}")
+
+        # Create a file and write to it
+        with smbclient.open_file(
+            f"{python_server}/{python_server_file_path}/{x}", mode="wb",
+            username=python_server_uid, password=python_server_pwd
+        ) as fd:
+            fd.write(file_contents)
+
+
+def Datavalidation(acumen_incoming_path):    
+    smbclient.register_session(host, username=user, password=passwd)
+    file_list = smbclient.listdir(acumen_incoming_path)
+    File_Count = len(file_list)
+    File_Msg = f"Total csv files processed - {File_Count}"
+    with smbclient.open_file(
+            f"{python_server}/{python_server_file_path}/FileCount_Validation.txt", mode="w",
+            username=python_server_uid, password=python_server_pwd
+        ) as fd:
+            fd.write(File_Msg)
+    
+    td_conn = BaseHook.get_connection('oss-teradata')
+    td_username = td_conn.login
+    td_password = td_conn.password
+    td_extra = td_conn.extra_dejson
+    td_logmech = td_extra["logmech"]
+    engine_str = f'teradatasql://{td_username}:{td_password}@{TD_Server}/?logmech={td_logmech}&encryptdata=true'
+    print(engine_str)
+    td_engine = create_engine(engine_str)
+    print(td_engine)
+    conn = td_engine.connect()
+    sqlqry = f"""SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION 
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_APD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ARV_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_IOP_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_OPIOID_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_PST_INS_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
+            UNION
+            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE;"""
+
+    df = pd.read_sql(sqlqry, con=conn)
+    File_Count_tbl = str(len(df))
+    Tbl_Msg = f"\nTotal csv files loaded in pharmacy core - {File_Count_tbl}"
+    with smbclient.open_file(
+            f"{python_server}/{python_server_file_path}/FileCount_Validation.txt", mode="a",
+            username=python_server_uid, password=python_server_pwd
+        ) as fd:
+            fd.write(Tbl_Msg)
+
+    File_row_count_df = pd.DataFrame(columns=['FileName', 'Count'])
+    file_name = []
+    Count_Result = []
+    for file in file_list:
+        smb_path = smbclient.open_file(acumen_incoming_path+file, 'r')
+        print(smb_path)
+        df_data = pd.read_csv(smb_path)
+        file_name.append(file)
+        Count_Result.append(len(df_data))
+        print(f"{file}: {len(df_data)}")
+    File_row_count_df["FileName"] = file_name
+    File_row_count_df["Count"] = Count_Result
+    
+    print(File_row_count_df.to_string())
+
+    sqlquery1 = f"""SEL  Filename,COUNT(*) as Cnt FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION 
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_APD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ARV_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_IOP_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_OPIOID_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_PST_INS_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
+                UNION
+                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME;"""
+
+    Tbl_row_count_df = pd.read_sql(sqlquery1,con=conn,columns=[])
+    print(Tbl_row_count_df.to_string())
+    Join_df = File_row_count_df.merge(Tbl_row_count_df, on='FileName', how='left')
+    print(Join_df)
+    Join_df['Result'] = np.where((Join_df['Count']== Join_df['Cnt']),'PASS','FAIL')
+    with smbclient.open_file(
+            f"{python_server}/{python_server_file_path}/Datacount_Validation.txt", mode="w",
+            username=python_server_uid, password=python_server_pwd
+    ) as fd:
+        Join_df[['FileName','Result']].to_csv(fd, index = False)
+
+    print(Join_df[["FileName", "Result"]])
+
+    return Join_df[['FileName', 'Result']].to_json()
+
+
+def send_email_with_dataframes(
+    dfs: Union[pd.DataFrame, List[pd.DataFrame]],
+    csv_file_names: Union[str, List[str]],
+    subject: str = '',
+    body: str = ''
+) -> None:
+    """
+    Email recipients with the dataframes attached as csv files.
+
+    :param dfs: The dataframes to be emailed as csv attachments.
+    :param csv_file_names: The file names to assign to each csv attachment.
+    :param subject: The subject line of the email.
+    :param body: The body of the email.
+    """
+
+    # Construct email
+    email_msg = MIMEMultipart()
+    email_msg["Subject"] = subject
+
+    if isinstance(dfs, pd.DataFrame):
+        dfs = [dfs]
+
+    if isinstance(csv_file_names, str):
+        csv_file_names = [csv_file_names]
+
+    if(len(dfs) != len(csv_file_names)):
+        print("Aborting email send. Number of dataframes does not match the number of provided file names.")
+        return
+
+    for df, fname in zip(dfs, csv_file_names):
+
+        # Store dataframe as a csv in memory
+        buffer = StringIO()
+        df.to_csv(buffer, index=False)
+
+        csv_file_attachment = MIMEApplication(buffer.getvalue())
+        csv_file_attachment["Content-Disposition"] = f'attachment; filename={fname}.csv'
+        email_msg.attach(csv_file_attachment)
+
+        buffer.close()
+
+    html_attachment = MIMEText(body, 'html')
+    email_msg.attach(html_attachment)
+
+    send_mime_email(e_from=EMAIL_SENDER, e_to=EMAIL_RECIPIENT, mime_msg=email_msg)
+
+def success_email(**context):
+    """
+    Task to send Acumen specific validation data at the end of each monthly run.
+    """
+
+    incoming_json = context["ti"].xcom_pull(task_ids='Data_Validation')
+    df = pd.DataFrame.from_dict(json.loads(incoming_json))
+
+    email_body = \
+        f"""
+        Hi Team,
+        <br>
+        <br>
+        Monthly Acumen load for the month of {datetime.now().strftime("%B")} has been completed.
+        <br>
+        Total number of CSV files loaded in Core: {len(df)}
+        <br>
+        <br>
+        For any questions, please email USM_GOV_CEF_DATACURATORS@Cigna.com.
+        """
+
+    send_email_with_dataframes(
+        dfs=df,
+        csv_file_names="Data_Count_Validation",
+        subject=f'({load_env}) Acumen Data Validation Results {curr_date}',
+        body=email_body
+    )
+
+with DAG(
+    dag_id=dag_id, 
+	default_args=default_args,
+    schedule_interval=schedule_cron, 
+	catchup=False,
+	max_active_runs=1
+	)as dag:
+
+    starting_workflow = BashOperator(
+        task_id="starting_workflow",
+        bash_command="echo Starting Workflow!",
+        dag=dag
+    )
+
+    checking_for_file = SMBSensor(
+        task_id="checking_for_file",
+        fs_conn_id=wdc_comp_oper_nas_var,
+        filepath=comp_oper_file_path,
+        mode='reschedule',
+        poke_interval=43200,
+        timeout=172800,
+        dag=dag
+    )
+	
+	
+    unzip_folder_nas = PythonOperator(
+        task_id='Unzip_folder_NAS',
+        dag=dag,
+        python_callable=extract_zip_files,
+        op_kwargs={"acumen_input_path": acumen_input_path,
+		           "acumen_incoming_path": acumen_incoming_path           
+		}
+)
+
+    trigger_adh_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_ADH_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_ADH_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_cob_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_COB_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_COB_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_apd_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_APD_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_APD_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_arv_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_ARV_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_ARV_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+
+    trigger_opioid_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_OPIOID_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_OPIOID_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_poly_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_POLY_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_POLY_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_supd_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_SUPD_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_SUPD_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )	
+
+    trigger_pst_ins_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_PST_INS_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_PST_INS_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_iop_denominator_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_IOP_Denominator_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_IOP_DENOMINATOR_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	
+    trigger_adh_exclusion_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_ADH_Exclusion_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_ADH_EXCLUSION_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+	 
+    trigger_supd_exclusion_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_SUPD_Exclusion_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_SUPD_EXCLUSION_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+
+    trigger_cob_exclusion_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_COB_Exclusion_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_COB_EXCLUSION_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+
+    trigger_poly_exclusion_nas_to_td_load = TriggerDagRunOperator(
+        task_id='Trigger_POLY_Exclusion_NAS_to_TD_load',
+        trigger_dag_id='OSSTD_ACUMEN_POLY_EXCLUSION_NAS_TO_TD',
+        wait_for_completion=True,
+        trigger_rule='all_success'
+    )
+
+    data_validation = PythonOperator(
+        task_id='Data_Validation',
+        dag=dag,
+        python_callable=Datavalidation,
+        op_kwargs={
+                   "acumen_incoming_path": acumen_incoming_path
+                   }
+    )
+
+    archive_Files_COMP_OPER = PythonOperator(
+        task_id='Archive_Files_COMP_OPER',
+        dag=dag,
+        python_callable=archive_zip_files,
+        op_kwargs={"acumen_input_path": acumen_input_path,
+                   "acumen_incoming_path": acumen_incoming_path,
+                   "acumen_archive_path": acumen_archive_path
+                   }
+    )
+    
+    archive_Files_pythonserver = PythonOperator(
+        task_id='Archive_Files_Pythonserver',
+        dag=dag,
+        python_callable=archive_zip_files_Pythonserver,
+        op_kwargs={"acumen_input_path": acumen_input_path
+                   }
+    )
+
+    send_success_email = PythonOperator(
+        task_id='Notify_Success_With_Attached_Validation',
+        dag=dag,
+        python_callable=success_email,
+    )
+
+starting_workflow >> checking_for_file >> unzip_folder_nas >> [trigger_adh_denominator_nas_to_td_load, trigger_cob_denominator_nas_to_td_load, trigger_apd_denominator_nas_to_td_load, trigger_arv_denominator_nas_to_td_load, trigger_opioid_denominator_nas_to_td_load, trigger_poly_denominator_nas_to_td_load, trigger_supd_denominator_nas_to_td_load, trigger_pst_ins_denominator_nas_to_td_load, trigger_iop_denominator_nas_to_td_load, trigger_adh_exclusion_nas_to_td_load, trigger_supd_exclusion_nas_to_td_load, trigger_cob_exclusion_nas_to_td_load, trigger_poly_exclusion_nas_to_td_load]>> data_validation >> archive_Files_pythonserver >> archive_Files_COMP_OPER >> send_success_email
