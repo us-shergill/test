@@ -1,13 +1,124 @@
-syntax = "proto2";
-// import "google/protobuf/timestamp.proto";
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.utils.dates import days_ago
+import os
+import pandas as pd
+import smbclient
+from sqlalchemy import create_engine
+from datetime import datetime
+import shutil
 
-// Define a message type representing the rows in your table. The message
-// cannot contain fields which are not present in the table.
-message Record {
+# Configurations
+NAS_BASE = r"\\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS"
+INPUT_DIR = os.path.join(NAS_BASE, "input")
+ARCHIVE_DIR = os.path.join(NAS_BASE, "archive")
+OUTPUT_DIR = os.path.join(NAS_BASE, "output")
+TERADATA_CONN = "teradata_default"
 
-  optional string json_payload = 1;
-  optional string asset_id = 2;
-  // Use the required keyword for client-side validation of required fields.
-  optional int64 last_modified_timestamp = 3;
-  optional int64 ingested_timestamp = 4;
-}
+default_args = {"owner": "airflow", "retries": 1}
+
+dag = DAG(
+    dag_id="sar_end_to_end_dag",
+    start_date=days_ago(1),
+    schedule_interval="@daily",
+    catchup=False,
+    default_args=default_args
+)
+
+def find_new_file(**kwargs):
+    smbclient.register_session(server="mdnas1.healthspring.inside", username="YOUR_USERNAME", password="YOUR_PASSWORD")
+
+    files = [f for f in smbclient.listdir(INPUT_DIR) if f.endswith(".csv")]
+    if not files:
+        return None
+    
+    latest_file = max(files, key=lambda x: smbclient.stat(os.path.join(INPUT_DIR, x)).st_mtime)
+    new_file_path = os.path.join(INPUT_DIR, latest_file)
+    kwargs['ti'].xcom_push(key='new_file_path', value=new_file_path)
+    kwargs['ti'].xcom_push(key='file_name', value=latest_file)
+
+def load_reference_table(**kwargs):
+    new_file = kwargs['ti'].xcom_pull(key='new_file_path')
+    if not new_file:
+        return
+
+    df = pd.read_csv(new_file)
+    engine = create_engine(f"teradatasql://YOUR_UID:YOUR_PWD@YOUR_HOST")
+    with engine.begin() as conn:
+        conn.execute("DELETE FROM VT_SAR_PLAN")
+        df.to_sql('VT_SAR_PLAN', con=conn, index=False, if_exists='append')
+
+def archive_file(**kwargs):
+    file_name = kwargs['ti'].xcom_pull(key='file_name')
+    if file_name:
+        smbclient.rename(os.path.join(INPUT_DIR, file_name), os.path.join(ARCHIVE_DIR, file_name))
+
+def run_sar_queries(**kwargs):
+    engine = create_engine(f"teradatasql://YOUR_UID:YOUR_PWD@YOUR_HOST")
+    
+    sar_sql = open("/path/to/sar.sql").read()
+    nr_sql = open("/path/to/nr.sql").read()
+
+    with engine.connect() as conn:
+        sar_df = pd.read_sql(sar_sql, conn)
+        nr_df = pd.read_sql(nr_sql, conn)
+
+    kwargs['ti'].xcom_push(key='sar_df', value=sar_df.to_json(orient='records'))
+    kwargs['ti'].xcom_push(key='nr_df', value=nr_df.to_json(orient='records'))
+
+def generate_output_files(**kwargs):
+    sar_df = pd.read_json(kwargs['ti'].xcom_pull(key='sar_df'))
+    nr_df = pd.read_json(kwargs['ti'].xcom_pull(key='nr_df'))
+
+    today_str = datetime.today().strftime("%Y%m%d")
+
+    for df, suffix in [(sar_df, "SAR"), (nr_df, "NR")]:
+        for (contract, pbp), subdf in df.groupby(["CCONTRACT", "CPBP"]):
+            base_name = f"2026{suffix}_Mailing_Fulfillment_{contract}_{pbp}_000_{today_str}.csv"
+            summary_name = base_name.replace(".csv", "_Summary.csv")
+            error_name = base_name.replace(".csv", "_Errors.csv")
+
+            # Write full file
+            smbclient.open_file(os.path.join(OUTPUT_DIR, base_name), mode='wb').write(subdf.to_csv(index=False).encode())
+
+            # Summary file: only Valid records
+            summary_df = subdf[subdf["COMMENTS"] == "Valid"]
+            smbclient.open_file(os.path.join(OUTPUT_DIR, summary_name), mode='wb').write(summary_df.to_csv(index=False).encode())
+
+            # Error file: everything else
+            error_df = subdf[subdf["COMMENTS"] != "Valid"]
+            smbclient.open_file(os.path.join(OUTPUT_DIR, error_name), mode='wb').write(error_df.to_csv(index=False).encode())
+
+with dag:
+    check_file_task = PythonOperator(
+        task_id="check_new_file",
+        python_callable=find_new_file,
+        provide_context=True
+    )
+
+    load_file_task = PythonOperator(
+        task_id="load_reference_table_if_new",
+        python_callable=load_reference_table,
+        provide_context=True
+    )
+
+    archive_file_task = PythonOperator(
+        task_id="archive_loaded_file",
+        python_callable=archive_file,
+        provide_context=True
+    )
+
+    run_queries_task = PythonOperator(
+        task_id="run_sar_and_nr_queries",
+        python_callable=run_sar_queries,
+        provide_context=True
+    )
+
+    write_outputs_task = PythonOperator(
+        task_id="generate_output_csvs",
+        python_callable=generate_output_files,
+        provide_context=True
+    )
+
+    check_file_task >> load_file_task >> archive_file_task
+    archive_file_task >> run_queries_task >> write_outputs_task
