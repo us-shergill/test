@@ -1,410 +1,385 @@
-#!/usr/bin/env python
-# coding: utf-8
-from tarfile import StreamError
-from airflow.models import Variable
-from airflow.decorators import dag, task
-import json
-
-import pendulum
-import datetime
-import logging
-import math
-import numpy as np
-import time
-from typing import List, Dict
-import os
-from google.cloud import bigquery
-from google.cloud import bigquery_storage_v1
-from google.cloud.bigquery_storage_v1 import types
-from google.cloud.bigquery_storage_v1 import writer
-from google.cloud.bigquery_storage_v1 import exceptions as bqstorageexceptions
-from google.protobuf import descriptor_pb2
-from COLLIBRA.utils.collibra_api import CollibraOutputModuleAPI
-from COLLIBRA.utils.bq_utils import return_latest_datetime
-
-from COLLIBRA import record_pb2
-
-logger = logging.getLogger("airflow.task")
-
-
-collibra_hostnames = {"dev": "arvest-dev.collibra.com", "test": "arvest-dev.collibra.com","prod": "arvest.collibra.com"}
-ENVIRONMENT = os.environ.get("DBT_ENVIRONMENT")
-COLLIBRA_URL_HOSTNAME = collibra_hostnames[ENVIRONMENT]
-COLLIBRA_USERNAME = "svc_dataplatform_collibra_metadata"
-COLLIBRA_PASSWORD = Variable.get("collibra_password")
-
-PROJECT = "prj-d-data-platform-4922"
-DATASET = "landing_collibra"
-TABLE_NAME = "asset"
-
-TEMPLATE_FILE = "nested_query.json"
-
-PAGE_LENGTH = 5000
-
-# Get the epochtime, in milliseconds, when initializing DAG
-batch_epoch_time = int(str(time.time() * 1000).split(".")[0])
-client = bigquery.Client(project=PROJECT)
-table_full_name = f"{PROJECT}.{DATASET}.{TABLE_NAME}"
-
-
-# Define Functions
-def convert_asset_to_bq_proto_row(row_json: Dict[str, any]) -> str:
-    """
-    Given a json containing metadata, create the protobuf
-    record.
-
-    Args:
-        row_json (dict): a json record containing asset_id, a last modified
-            timestamp, and a payload of miscellaneous data.
-
-    Returns:
-        str: protobuf serialized record
-    """
-    row = record_pb2.Record()
-    row.last_modified_timestamp = int(row_json["last_modified"] * 1000)
-    row.asset_id = row_json["asset_id"]
-    # Remove the asset_id from the payload
-    row_json.pop("asset_id")
-    row.json_payload = json.dumps(row_json)
-    # Convert milliseconds to microseconds (needed by Google BigQuery Storage API)
-    row.ingested_timestamp = batch_epoch_time*1000
-    return row.SerializeToString()
-
-
-def configure_and_create_stream(
-    client: bigquery_storage_v1.BigQueryWriteClient, table: bigquery.Table
-) -> types.WriteStream:
-    """
-    Create a "PENDING" type BigQuery Storage API Stream.
-
-    Args:
-        client (bigquery_storage_v1.BigQueryWriteClient): BQ Storage API Client
-        table (bigquery.Table): A BigQuery object for the BQ table target.
-    Returns:
-        stream (types.WriteStream): BigQuery Storage API Stream
-    """
-    # Set target table for stream
-    target_table = client.table_path(table.project, table.dataset_id, table.table_id)
-
-    # Create stream object
-    stream = types.WriteStream()
-
-    # Use the PENDING type to wait
-    # until the stream is committed before it is visible. See:
-    # https://cloud.google.com/bigquery/docs/reference/storage/rpc/google.cloud.bigquery.storage.v1#google.cloud.bigquery.storage.v1.WriteStream.Type
-    stream.type_ = types.WriteStream.Type.PENDING
-    stream = client.create_write_stream(parent=target_table, write_stream=stream)
-    logging.info(
-        "Stream created to write to table %s in %s mode", target_table, stream.type_
-    )
-
-    return stream
-
-
-def create_batch_commit_request(
-    client: bigquery_storage_v1.BigQueryWriteClient,
-    stream: types.WriteStream,
-    table: bigquery.Table,
-) -> types.BatchCommitWriteStreamsRequest:
-    """
-    Create a request to commit a batch of records to a stream.
-
-    Args:
-        client (bigquery_storage_v1.BigQueryWriteClient): BigQuery Storage Client
-        stream (types.WriteStream): BigQuery Storage Stream
-        table (bigquery.Table): Target table for stream
-
-    Returns:
-        request (types.BatchCommitWriteStreamsRequest): The request to commit the stream.
-    """
-    request = types.BatchCommitWriteStreamsRequest()
-    request.parent = client.table_path(table.project, table.dataset_id, table.table_id)
-    request.write_streams = [stream.name]
-    return request
-
-
-def create_request_template(stream, proto_class) -> types.AppendRowsRequest:
-    """
-    Create the template for an append rows request.
-
-    Args:
-        stream (types.WriteStream): A BigQuery Storage API Stream to which to append data.
-        proto_class (record_pb2.Record): The record class for a protobuf record.
-
-    Returns:
-        types.AppendRowsRequest: Template for appending rows to stream
-    """
-    request_template = types.AppendRowsRequest()
-    request_template.write_stream = stream.name
-
-    # Define the proto schema
-    proto_schema = types.ProtoSchema()
-    proto_descriptor = descriptor_pb2.DescriptorProto()
-    proto_class.DESCRIPTOR.CopyToProto(proto_descriptor)
-    proto_schema.proto_descriptor = proto_descriptor
-
-    # Define the proto writer using schema
-    proto_data = types.AppendRowsRequest.ProtoData()
-    proto_data.writer_schema = proto_schema
-
-    # Load writer into request template
-    request_template.proto_rows = proto_data
-
-    logger.info("Append rows to stream request template defined.")
-    return request_template
-
-
-def get_next_page(last_timestamp, api, page) -> List[Dict[str, any]]:
-    """
-    Get the next page of records. The last_datetime is used to determine
-    the start time for the query.
-
-    Args:
-        last_timestamp (float): The last datetime in the table
-        api (CollibraOutputModuleAPI): API class instance to use to make the request.
-        page (int): The page of records (from GraphML query) to obtain.
-
-    Returns:
-        List[Dict[str, any]]: List of metadata records
-    """
-    if not last_timestamp:
-        # query full dataset (no time restrictions except on right side)
-        results, results_size = api.get_results_page(
-            page * PAGE_LENGTH, PAGE_LENGTH, batch_epoch_time, 0
-        )
-    else:
-        # query since last time.
-        epoch_start = int(last_timestamp * 1000) + 1
-        results, results_size = api.get_results_page(
-            page * PAGE_LENGTH, PAGE_LENGTH, batch_epoch_time, epoch_start
-        )
-    return results, results_size
-
-
-def prepare_proto_rows_request(chunk, offset) -> types.AppendRowsRequest:
-    """
-    Prepare a row append request for a given chunk of a page.
-
-    Args:
-        page_number (int): page number of query being processed
-        chunk (List[Dict[str, int]]): Chunk of records to append to stream
-
-    Returns:
-        types.AppendRowsRequest: The request containing the serialized rows
-            from chunk.
-    """
-    request = types.AppendRowsRequest()
-    request.offset = offset
-    logger.info("Offset to be used: %s", request.offset)
-    proto_data = types.AppendRowsRequest.ProtoData()
-    proto_rows = types.ProtoRows()
-    for record in chunk:
-        str_rec = convert_asset_to_bq_proto_row(record)
-        proto_rows.serialized_rows.append(str_rec)
-    proto_data.rows = proto_rows
-    request.proto_rows = proto_data
-    # Increment offset for next time
-    offset = offset + len(chunk)
-    return request, offset
-
-
-@task
-def create_table(project: str, dataset: str, table_id: str) -> None:
-    """
-    Create an asset table in bigquery with fields for asset id,
-    modified date, and the asset data in a json payload only if
-    the table does not yet exist.
-
-    Ensure that the data is partitioned on the modified date.
-
-    Args:
-        project (str): GCP project id
-        dataset (str): BigQuery dataset id
-        table_id (str): BigQuery table id
-    """
-    # Create dataset if not exists
-    client.create_dataset(dataset, exists_ok=True)
-    dataset_ref = bigquery.DatasetReference(project, dataset)
-    # Create table if not exists
-    schema = [
-        bigquery.SchemaField("json_payload", "JSON"),
-        bigquery.SchemaField("asset_id", "STRING"),
-        bigquery.SchemaField("last_modified_timestamp", "TIMESTAMP"),
-        bigquery.SchemaField("ingested_timestamp", "TIMESTAMP")
-    ]
-    table_ref = dataset_ref.table(table_id)
-    table = bigquery.Table(table_ref, schema=schema)
-    table.time_partitioning = bigquery.TimePartitioning(
-        type_=bigquery.TimePartitioningType.DAY,
-        field="last_modified_timestamp",  # name of column to use for partitioning
-    )
-    table.clustering_fields = ["asset_id","ingested_timestamp"]
-
-    table = client.create_table(table, exists_ok=True)
-    logger.info(f"Table {table_full_name} was created if it did not yet exist.")
-
-
-@task
-def get_latest_date(table) -> datetime.datetime:
-    """
-    Obtain the latest "last_modified_timestamp" from the table.
-
-    Args:
-        table (str): The table fully qualified name containing Collibra
-            metadata. e.g. project.dataset.table
-
-    Returns:
-        datetime.datetime: The last last_modified_timestamp in datetime
-            (UTC) present in BQ table.
-    """
-    last_partition_datetime = return_latest_datetime(
-        client, table, "last_modified_timestamp"
-    )
-    if last_partition_datetime:
-        logger.info(
-            "The table currently contains all modified records through"
-            f"{last_partition_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        last_partition_datetime = last_partition_datetime.timestamp()
-    else:
-        logger.info("The table has no records yet.")
-    return last_partition_datetime
-
-
-@task
-def write_collibra_metadata_to_BQ(last_modified: datetime.datetime) -> None:
-    """
-    Incrementally obtain Collibra Metadata API data by paginating.
-    For each page, make an append row request to a BigQuery Storage
-    API stream.
-
-    Once all results have been appended to the stream, commit those
-    records so they are visible to users. If there is an error before
-    the commit step, the entire transaction is cancelled, and the
-    next task run will obtain the same data.
-
-    Args:
-        last_modified (datetime.datetime): The latest modified datetime in
-        the table.
-    """
-
-    # Initialize the CollibraAPI
-    collibra = CollibraOutputModuleAPI(
-        COLLIBRA_URL_HOSTNAME,
-        COLLIBRA_USERNAME,
-        COLLIBRA_PASSWORD,
-    )
-    collibra.get_auth()
-    logger.info("Collibra API client authenticated.")
-
-    collibra.set_query_template(__file__, TEMPLATE_FILE)
-    logger.info("Collibra API client template set to %s", TEMPLATE_FILE)
-
-    # Initialize the BQ Storage API Stream
-    dataset_ref = bigquery.DatasetReference(project=PROJECT, dataset_id=DATASET)
-    table = bigquery.Table(
-        bigquery.TableReference(dataset_ref=dataset_ref, table_id=TABLE_NAME)
-    )
-    bq_write_client = bigquery_storage_v1.BigQueryWriteClient()
-    stream = configure_and_create_stream(bq_write_client, table)
-    request_template = create_request_template(stream, record_pb2.Record)
-    active_stream = writer.AppendRowsStream(bq_write_client, request_template)
-
-    # For each batch of new Collibra Metadata, Append to stream
-    logger.info("Iterating through results")
-    page_number = 0
-    offset = 0
-    responses = []
-    while "Iterating through results":
-        # Get the next result set
-        results, results_size_mb = get_next_page(last_modified, collibra, page_number)
-
-        # Append rows to request
-        if results:
-            logger.info(
-                "Retrieved page %s of GraphQL query results with %s records",
-                page_number,
-                len(results),
-            )
-            num_chunks = math.ceil(results_size_mb / 10.0)
-            if num_chunks > 1:
-                logger.info(
-                    (
-                        "The full result set for page %s is more than the max "
-                        "allowed by the BigQuery Storage API; splitting this "
-                        "result set into %s chunks"
-                    ),
-                    page_number,
-                    num_chunks,
-                )
-            results_chunks = np.array_split(results, num_chunks)
-            # Iterate through the chunks
-            for i, chunk in enumerate(results_chunks):
-                request, offset = prepare_proto_rows_request(chunk, offset)
-                logger.debug("Sending request to stream")
-                try:
-                    future = active_stream.send(request)
-                except bqstorageexceptions.StreamClosedError:
-                    # Create a new append row stream in the case it gets closed
-                    logger.info("Creating a new stream because other writer " "closed")
-                    active_stream = writer.AppendRowsStream(
-                        bq_write_client, request_template
-                    )
-                    future = active_stream.send(request)
-                    logger.info(
-                        "Request for chunk %i of %i for page %i sent.",
-                        i + 1,
-                        num_chunks,
-                        page_number,
-                    )
-                responses.append(future)
-            # If this page of records was not full-length, finish up request
-            if len(results) < PAGE_LENGTH:
-                break
-            # Increment page number
-            page_number += 1
-        else:
-            logger.info("No more records left to append")
-            break
-    # Get results of appending requests
-    results = [response.result() for response in responses]
-    logger.info("Closing and finalizing stream")
-    active_stream.close()
-    bq_write_client.finalize_write_stream(name=stream.name)
-
-    # Commit
-    commit_request = create_batch_commit_request(bq_write_client, stream, table)
-    response = bq_write_client.batch_commit_write_streams(commit_request)
-    if response.stream_errors:
-        raise StreamError(
-            "The stream had an error committing."
-            f"{[print(error) for error in response.stream_errors()]}"
-        )
-
-    logger.info("Writes to stream: '%s' have been committed.", stream.name)
-    logger.info("%i rows were added to the table %s", offset, table_full_name)
-
-
-@dag(
-    schedule="@daily",
-    start_date=pendulum.datetime(2023, 7, 19, tz="UTC"),
-    catchup=False,
-    max_active_runs=1,
-    tags=["metadata", "collibra", "api"],
-)
-def collibra_metadata_sync():
-    """
-    Create a dag which:
-    1. Creates a table (if needed)
-    2. Determines the latest date from that table
-    3. Uses this date to obtain Collibra metadata
-    on assets that have been modified since the last successful day run.
-    """
-    created_table = create_table(PROJECT, DATASET, TABLE_NAME)
-    date = get_latest_date(table_full_name)
-    write_stream = write_collibra_metadata_to_BQ(date)
-
-    [created_table >> date >> write_stream]
-
-
-define_dag = collibra_metadata_sync()
+
+
+--2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD.csv
+--Extract SQL work in progress
+SELECT
+MBR.MEMCODNUM --N/A
+,MBR.MemberID as "Member ID"
+,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+,MBR.TermDate as TermDate --N/A
+,MBRS.Description as CurrentStatus --N/A 
+,DMG.OECCounty --N/A
+,DMG.SCC1 as DMGSCC1 --N/A
+,DMG.SCC2 as DMGSCC2 --N/A
+,DMG.FirstName as FirstName
+,DMG.LastName as LastName
+,PhyADDR.Address1 as PhyAddr1 --N/A
+,PhyADDR.Address2 as PhyAddr2 --N/A
+,PhyADDR.City as PhyCity --N/A
+,PhyADDR.State as PhyState --N/A
+,CASE 
+  WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+  ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+ END as PhyZip --N/A
+,MailADDR.Address1 as MailAddr1
+,MailADDR.Address2 as MailAddr2
+,MailADDR.City as MailCity
+,MailADDR.State as MailState
+,CASE 
+  WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+  ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+ END as MailZip
+,MBR.PlanID as CContract
+,MBR.PBP as CPBP
+,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+,EAMSGMNT.Span_EffDate
+,EAMSGMNT.Span_TermDate
+,PLN.ProductName as "Plan Name"
+,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+,SPAN.SPANSCC --N/A 
+,DMG.SCC1 --N/A 
+,COALESCE(DMG."Language",'ENG') as LanguageText
+,CASE 
+	WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+	WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+	WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+	WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+	ELSE '' 
+	END AS "Alternate Format"
+,SC.CountyName as County
+,PhyADDR.State as PhysicalState
+,SC.State as CountyState --N/A
+,MBOM.State as "Plan State"
+,MemberID||'_SAR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
+,MBOM.RecordType as "Record Type"
+,MBOM.LetterMaterialID as "Material ID"
+,MBOM.PLANReplacementID as "Plan Replacement ID"
+
+FROM (
+	SELECT
+	MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+	FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+	WHERE SRC_DATA_KEY = '210'
+	and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+	ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+	AND MBR.MemCodNum = DMG.MemCodNum
+	--AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+	ON MBR.MemberStatus = MBRS.Status
+	--AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+	
+	LEFT JOIN 
+	(
+		Select 
+				tbe.PlanID,
+				tbe.MemCodNum,
+				tbe.HIC AS SpanMBINumber,
+				tbe.SPANTYPE AS SpanType,
+				tbe."Value" AS SpanValue,
+				CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+				CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+				CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+				CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+				Tbt.DateCreated AS TR_CREATE_DATE,
+				--SegmentId population preference: SEGC, SEGD, Transactions, Default000
+				COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+				SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                   FROM (
+                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                          a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+               LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                     ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                        ON tbt.MemCodNum = tbe.MemCodNum
+                                          AND tbt.PlanID = tbe.PlanID
+                                          AND tbt.PBPID = tbe."Value"
+                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                          AND tbt.TransStatus IN (5)
+                                          WHERE tbe.SpanType = 'PBP'
+                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                          ) EAMSGMNT
+										  
+	ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+	AND MBR.PlanID = EAMSGMNT.PlanID
+	AND MBR.PBP = EAMSGMNT.SpanValue
+
+	JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+	ON MBR.PlanID = PLN.PlanID
+	AND MBR.PBP = PLN.PBPID
+
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '1'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+	ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = PhyADDR.MemCodNum
+
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '2'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+	ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = MailADDR.MemCodNum
+	
+	LEFT JOIN (
+	select 
+	memcodnum, "value" as SPANSCC  
+	FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+	WHERE spantype = 'SCC'
+	qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+	ON dmg.memcodnum = span.memcodnum
+
+	JOIN VT_SAR_PLAN SAR
+	ON MBR.PlanID = SAR.Contract
+	AND MBR.PBP = SAR.PBP
+	AND CSegment = SAR.Segment
+	AND SCCCode = SAR.ServiceAreaCountyCode
+
+	LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+	ON SCCCode = SC.SCC_CODE
+	
+	LEFT JOIN 
+	(
+		SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+	ON SC.State = STREF.STATE_ABBREVIATED_NAME 
+
+	LEFT JOIN VT_SAR_NR_BOM_2026 MBOM
+	ON MBR.PlanID = MBOM.Contract
+	AND MBR.PBP = MBOM.PBP
+	AND CSegment = MBOM.Segment
+	AND STREF.STATE_NAME = MBOM.State;
+	
+	--SAR Fallout and Exclusion
+select 
+Case 
+when physicalstate <> countystate Then 'Fallout, Physical Address State '||physicalstate||', SCC State '||CountyState
+when MailAddr1 is NULL Then 'Fallout, no mailing address'
+when "Member ID" is NULL Then 'Fallout, no member ID'
+when FirstName is NULL Then 'Fallout, no first name'
+when LastName is NULL Then 'Fallout, no last name'
+when MailCity is NULL Then 'Fallout, no mail address city'
+when MailState is NULL Then 'Fallout, no mail address state'
+when MailZip is NULL Then 'Fallout, no mail address zip'
+When "Plan Name" is NULL Then 'Fallout, no plan name'
+When PhyState is NULL Then 'Fallout, no physical address state'
+when "Material ID" is NULL Then 'BOM, Missing Data'
+--when CurrentStatus = 'Not Enrolled' and RIGHT("Member ID",2)='XX' Then 'Do not report, not enrolled'
+when CurrentStatus = 'Not Enrolled' Then 'Do not report, not enrolled'
+when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') < current_date and Span_EffDate IS NULL 
+	Then 'Do not report, member effective date is in the past, has no span and is considered canceled'
+when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') >= current_date and Span_EffDate IS NULL 
+	Then 'Fallout, member status pending with effective date in future with no span'
+when CurrentStatus = 'Pending' Then 'Valid, status pending and effectivedate in future with span'
+Else 'Valid' end as Comments,
+SAR.*
+from hslabgrowthrpt.TEST_SAR_AB_VT SAR;
+
+
+--NR Extract SQL 
+SELECT
+MBR.MEMCODNUM --N/A
+,MBR.MemberID as "Member ID"
+,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+,MBR.TermDate as TermDate --N/A
+,MBRS.Description as CurrentStatus --N/A 
+,DMG.OECCounty --N/A
+,DMG.SCC1 as DMGSCC1 --N/A
+,DMG.SCC2 as DMGSCC2 --N/A
+,DMG.FirstName as FirstName
+,DMG.LastName as LastName
+,PhyADDR.Address1 as PhyAddr1 --N/A
+,PhyADDR.Address2 as PhyAddr2 --N/A
+,PhyADDR.City as PhyCity --N/A
+,PhyADDR.State as PhyState --N/A
+,CASE 
+  WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+  ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+ END as PhyZip --N/A
+,MailADDR.Address1 as MailAddr1
+,MailADDR.Address2 as MailAddr2
+,MailADDR.City as MailCity
+,MailADDR.State as MailState
+,CASE 
+  WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+  ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+ END as MailZip
+,MBR.PlanID as CContract
+,MBR.PBP as CPBP
+,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+,EAMSGMNT.Span_EffDate
+,EAMSGMNT.Span_TermDate
+,PLN.ProductName as "Plan Name"
+,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+,SPAN.SPANSCC --N/A
+,DMG.SCC1 --N/A
+,COALESCE(DMG."Language",'ENG') as LanguageText
+,CASE 
+	WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+	WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+	WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+	WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+	ELSE '' 
+	END AS "Alternate Format"
+,SC.CountyName as County
+,PhyADDR.State as PhysicalState
+,SC.State as CountyState --N/A
+--,NR.State as NRInclusionState
+,COALESCE(BOMWITHST.State,BOMNOST.State) as "Plan State"
+,MemberID||'_NR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
+,COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) as "Record Type"
+,COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) as "Material ID"
+,COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID) as "Plan Replacement ID"
+
+FROM (
+	SELECT
+	MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+	FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+	WHERE SRC_DATA_KEY = '210'
+	and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+	ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+	AND MBR.MemCodNum = DMG.MemCodNum
+	--AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+	ON MBR.MemberStatus = MBRS.Status
+	--AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+	
+	LEFT JOIN 
+	(
+		Select 
+				tbe.PlanID,
+				tbe.MemCodNum,
+				tbe.HIC AS SpanMBINumber,
+				tbe.SPANTYPE AS SpanType,
+				tbe."Value" AS SpanValue,
+				CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+				CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+				CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+				CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+				Tbt.DateCreated AS TR_CREATE_DATE,
+				--SegmentId population preference: SEGC, SEGD, Transactions, Default000
+				COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+				SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                   FROM (
+                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                          a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+               LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                     ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                        ON tbt.MemCodNum = tbe.MemCodNum
+                                          AND tbt.PlanID = tbe.PlanID
+                                          AND tbt.PBPID = tbe."Value"
+                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                          AND tbt.TransStatus IN (5)
+                                          WHERE tbe.SpanType = 'PBP'
+                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                          ) EAMSGMNT
+										  
+	ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+	AND MBR.PlanID = EAMSGMNT.PlanID
+	AND MBR.PBP = EAMSGMNT.SpanValue
+
+	JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+	ON MBR.PlanID = PLN.PlanID
+	AND MBR.PBP = PLN.PBPID
+
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '1'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+	ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = PhyADDR.MemCodNum
+
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '2'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+	ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = MailADDR.MemCodNum
+	
+	LEFT JOIN (
+	select 
+	memcodnum, "value" as SPANSCC  
+	FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+	WHERE spantype = 'SCC'
+	qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+	ON dmg.memcodnum = span.memcodnum
+
+	LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+	ON SCCCode = SC.SCC_CODE
+	
+	JOIN (SELECT Contract, PBP, Segment FROM VT_NR_PLAN group by 1,2,3) NR
+	ON MBR.PlanID = NR.Contract
+	AND MBR.PBP = NR.PBP
+	--AND SC.State = NR.State
+	AND CSegment = NR.Segment
+	
+	LEFT JOIN 
+	(
+		SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+	ON PhyADDR.State = STREF.STATE_ABBREVIATED_NAME 
+
+	LEFT JOIN VT_SAR_NR_BOM_2026 BOMWITHST
+	ON MBR.PlanID = BOMWITHST.Contract
+	AND MBR.PBP = BOMWITHST.PBP
+	AND CSegment = BOMWITHST.Segment
+	AND STREF.STATE_NAME = BOMWITHST.State
+	
+	LEFT JOIN (SELECT * 
+	FROM VT_SAR_NR_BOM_2026 
+	QUALIFY row_number() OVER (PARTITION BY Contract, PBP, Segment Order by State) = 1) BOMNOST
+	ON MBR.PlanID = BOMNOST.Contract
+	AND MBR.PBP = BOMNOST.PBP
+	AND CSegment = BOMNOST.Segment;
+	
+--NR Validation with comments 
+sel 
+CASE 
+when physicalstate <> countystate Then 'Fallout, Physical Address State '||physicalstate||', SCC State '||CountyState
+when MailAddr1 is NULL Then 'Fallout, no mailing address'
+when "Member ID" is NULL Then 'Fallout, no member ID'
+when FirstName is NULL Then 'Fallout, no first name'
+when LastName is NULL Then 'Fallout, no last name'
+when MailCity is NULL Then 'Fallout, no mail address city'
+when MailState is NULL Then 'Fallout, no mail address state'
+when MailZip is NULL Then 'Fallout, no mail address zip'
+When "Plan Name" is NULL Then 'Fallout, no plan name'
+When PhyState is NULL Then 'Fallout, no physical address state'
+when "Material ID" is NULL Then 'BOM, Missing Data'
+--when CurrentStatus = 'Not Enrolled' and RIGHT("Member ID",2)='XX' Then 'Do not report, not enrolled'
+when CurrentStatus = 'Not Enrolled' Then 'Do not report, not enrolled'
+when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') < current_date and Span_EffDate IS NULL 
+	Then 'Do not report, member effective date is in the past, has no span and is considered canceled'
+when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') >= current_date and Span_EffDate IS NULL 
+	Then 'Fallout, member status pending with effective date in future with no span'
+when CurrentStatus = 'Pending' Then 'Valid, status pending and effectivedate in future with span'
+when countystate is null then 'Fallout, no SCC'
+else 'Valid'
+end as comments, VT.*
+from HSLABGROWTHRPT.TEST_NR_AB_VT VT;	
+
+
+
