@@ -1,3 +1,52 @@
+All reports and file locations to be stored here: \\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files\MailDateResponseFiles
+SAR Plan
+Contract 	PBP 	Segment	State	Service Area County Name	Service Area County Code	Membership Count
+H0439	003	001	GA	Butts 	11160	
+H0439	003	001	GA	Greene 	11520	
+H0439	003	001	GA	Morgan	11771	
+H0439	003	001	GA	Oconee	11800	
+H0439	003	002	GA	Banks	11040	
+H0439	003	002	GA	Chattooga	11240	
+H0439	003	002	GA	Dawson	11350	
+H0439	003	002	GA	Fayette	11451	
+H0439	003	002	GA	White	11963	
+H0439	006	000	GA	Cobb	11290	
+H0439	006	000	GA	DeKalb	11370	
+H0672	005	000	NM	San Juan	32220	
+H2108	029	000	DE	Kent	08000	
+H2108	042	001	DE	Kent	08000	
+H4513	009	000	TX	Newton	45821	
+H4513	033	000	TN	Lake	44470	
+H4513	033	000	TN	Obion	44650	
+H4513	036	000	TN	Bedford	44010	
+H4513	036	000	TN	Grundy	44300	
+H4513	036	000	TN	Haywood	44370	
+H4513	039	000	AR	Crawford	04160	
+H4513	046	001	AL	Lowndes	01420	
+H4513	046	002	AL	Cherokee	01090	
+H4513	046	002	AL	Colbert	01160	
+H4513	046	002	AL	Lawrence	01390	
+H4513	049	005	TN	Lake	44470	
+H4513	049	005	TN	Obion	44650	
+H4513	052	000	AR	Crawford	04160	
+H4513	060	001	TX	Newton	45821	
+H4513	061	001	TX	Newton	45821	
+H4513	078	000	AR	Crawford	04160	
+H4513	081	000	AR	Crawford	04160	
+H4513	083	001	TX	Newton	45821	
+H4513	085	000	IL	DeKalb	14170	
+H4513	086	000	IL	DeKalb	14170	
+H4513	088	000	AL	Tuscaloosa	01620	
+H4513	091	000	TX	Newton	45821	
+H7849	024	000	MO	Caldwell	26120	
+H7849	102	003	AR	Crawford	04160	
+H7849	124	001	DE	Kent	08000	
+H7849	124	001	DE	New Castle	08010	
+H7849	124	001	DE	Sussex	08020	
+H9460	001	000	MO	Caldwell	26120	
+						
+
+
 2. Development end to end
                Extract process - Udai
                               - Source Tables are in Teradata
