@@ -1,5 +1,5 @@
 1.3.1.	One file should be created for each contract & PBP combination for mailing purposes. 
-
+1.3.6.	If any record is missing required data, it should still be placed on a separate file but named _error in same format as mailing for manual correction and error with what is missing. 
 2.	Summary Report
 2.1.	File format
 2.1.1.	CSV
