@@ -1,201 +1,265 @@
-import os
-import smbclient
-import pandas as pd
-from datetime import datetime
-from sqlalchemy import create_engine, text
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-from email.mime.text import MIMEText
+3.0	Business Requirements
+1.	Vendor file
+1.1.	Format 
+1.1.1.	CSV
+1.1.2.	Tab delimited format
+1.1.3.	File per contract & PBP combination is required
+1.2.	File Naming convention
+1.2.1.	2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD
+1.2.1.1.	The date represents the date the file was generated
+1.2.1.2.	If Segment is null/blank or 000 populate as 000.
+1.3.	Business Rules
+1.3.1.	One file should be created for each contract & PBP combination for mailing purposes. 
+1.3.1.1.	Templates are different per service area which necessitates different mail files. 
+1.3.2.	Return Mail address should be PO BOX 1002, Nashville, TN 37202
+1.3.3.	EAM data tables are the source of truth for the data. 
+1.3.4.	A row should return for any member that is active at the time of the data generation for mailing and without a future disenrollment date. 
+1.3.5.	The county information should be based on the customer’s physical address and not any county associated to a mailing address. 
+1.3.6.	If any record is missing required data, it should still be placed on a separate file but named _error in same format as mailing for manual correction and error with what is missing. 
+1.3.7.	This can include EGWP plans but should be confirmed yearly during bid processes by business. The PBP starts with an ‘8’
+1.3.7.1.	For 2026, no EGWP plans impacted by SAR.
+1.3.8.	Files should be generated daily after initial file for any members that newly enrolled into a plan fitting the SAR guidance so a letter can be sent. 
+1.3.8.1.	New enrollments should be identified as new enrollments or new members as of get date for the current year. 
+1.3.9.	Include members where the physical state and county code is listed below for only the contract and PBPs listed below. 
+1.3.10.	Exclude any members not in the above table per the criteria in the business rules.  
+2.	Summary Report
+2.1.	File format
+2.1.1.	CSV
+2.2.	File Name
+2.2.1.	GBSF_MAPD_SAR_Summary_CCYYMMDD
+2.3.	Business Rules
+2.3.1.	Count of member records by contract and PBP on the SAR file
+2.3.1.1.	This is used to reconcile membership counts to ensure all members receive a SAR
+2.4.	Data Fields
+2.4.1.	New year Contract
+2.4.2.	New year PBP
+2.4.3.	New Year Segment
+2.4.4.	Total count of membership
+3.	Reconciliation report
+3.1.	File format
+3.1.1.	CSV
+3.2.	File Name
+3.2.1.	GBSF_SAR_MissingMailDate_CCYYYMMDD
+3.3.	Business Rules
+3.3.1.	Take mail date files received from vendor and compare to outbound data files to confirm all have receipt dates
+3.3.2.	Generate a report with Member ID and Record ID that do not show a mail date. 
+All reports and file locations to be stored here: \\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files\MailDateResponseFiles
 
-def get_td_engine(user, password, host, logmech='TD2'):
-    engine_str = f'teradatasql://{user}:{password}@{host}/?logmech={logmech}&encryptdata=true'
-    return create_engine(engine_str)
+SQL
+--2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD.csv
+--Extract SQL work in progress
+SELECT
+MBR.MEMCODNUM --N/A
+,MBR.MemberID as "Member ID"
+,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+,MBR.TermDate as TermDate --N/A
+,MBRS.Description as CurrentStatus --N/A 
+,DMG.OECCounty --N/A
+,DMG.SCC1 as DMGSCC1 --N/A
+,DMG.SCC2 as DMGSCC2 --N/A
+,DMG.FirstName as FirstName
+,DMG.LastName as LastName
+,PhyADDR.Address1 as PhyAddr1 --N/A
+,PhyADDR.Address2 as PhyAddr2 --N/A
+,PhyADDR.City as PhyCity --N/A
+,PhyADDR.State as PhyState --N/A
+,CASE 
+  WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+  ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+ END as PhyZip --N/A
+,MailADDR.Address1 as MailAddr1
+,MailADDR.Address2 as MailAddr2
+,MailADDR.City as MailCity
+,MailADDR.State as MailState
+,CASE 
+  WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+  ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+ END as MailZip
+,MBR.PlanID as CContract
+,MBR.PBP as CPBP
+,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+,EAMSGMNT.Span_EffDate
+,EAMSGMNT.Span_TermDate
+,PLN.ProductName as "Plan Name"
+,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+,SPAN.SPANSCC --N/A 
+,DMG.SCC1 --N/A 
+,COALESCE(DMG."Language",'ENG') as LanguageText
+,CASE 
+	WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+	WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+	WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+	WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+	ELSE '' 
+	END AS "Alternate Format"
+,SC.CountyName as County
+,CASE 
+	WHEN PhyADDR.State = SC.State THEN PhyADDR.State 
+	Else MBOMSTREF.STATE_ABBREVIATED_NAME 
+	END AS PhysicalState
+,SC.State as CountyState --N/A
+,CASE 
+	WHEN PhyADDR.State = SC.State THEN MBOM.State 
+	Else MBOMNOST.State 
+	END AS "Plan State"
+,MemberID||'_SAR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
+,CASE 
+	WHEN PhyADDR.State = SC.State THEN MBOM.RecordType
+	Else MBOMNOST.RecordType 
+	END AS "Record Type"
+,CASE 
+	WHEN PhyADDR.State = SC.State THEN MBOM.LetterMaterialID 
+	Else MBOMNOST.LetterMaterialID 
+	END AS "Material ID"
+,CASE 
+	WHEN PhyADDR.State = SC.State THEN MBOM.PLANReplacementID 
+	Else MBOMNOST.PLANReplacementID 
+	END AS "Plan Replacement ID"
 
-def check_and_load_file(acumen_input_path, acumen_archive_path, target_table, host, user, passwd, td_engine):
-    smbclient.register_session(host, username=user, password=passwd)
-    files = smbclient.listdir(acumen_input_path)
-    input_files = [f for f in files if f.startswith("SAR_PLAN_INPUT") and f.endswith(".csv")]
-    if not input_files:
-        print("No SAR input files found.")
-        return None
+FROM (
+	SELECT
+	MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+	FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+	WHERE SRC_DATA_KEY = '210'
+	and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
 
-    latest_file = max(input_files)
-    latest_path = os.path.join(acumen_input_path, latest_file)
-    with smbclient.open_file(latest_path, mode='r') as f:
-        df = pd.read_csv(f)
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+	ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+	AND MBR.MemCodNum = DMG.MemCodNum
+	--AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
 
-    with td_engine.connect() as conn:
-        conn.execute(text(f"DELETE FROM {target_table}"))
-        df['LOAD_DT'] = datetime.now().strftime('%Y-%m-%d')
-        df.to_sql(target_table, conn, index=False, if_exists='append')
+	JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+	ON MBR.MemberStatus = MBRS.Status
+	--AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+	
+	LEFT JOIN 
+	(
+		Select 
+				tbe.PlanID,
+				tbe.MemCodNum,
+				tbe.HIC AS SpanMBINumber,
+				tbe.SPANTYPE AS SpanType,
+				tbe."Value" AS SpanValue,
+				CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+				CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+				CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+				CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+				Tbt.DateCreated AS TR_CREATE_DATE,
+				--SegmentId population preference: SEGC, SEGD, Transactions, Default000
+				COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+				SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                   FROM (
+                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                          a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+               LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                     ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                        ON tbt.MemCodNum = tbe.MemCodNum
+                                          AND tbt.PlanID = tbe.PlanID
+                                          AND tbt.PBPID = tbe."Value"
+                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                          AND tbt.TransStatus IN (5)
+                                          WHERE tbe.SpanType = 'PBP'
+                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                          ) EAMSGMNT
+										  
+	ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+	AND MBR.PlanID = EAMSGMNT.PlanID
+	AND MBR.PBP = EAMSGMNT.SpanValue
 
-    ts = datetime.now().strftime('%Y%m%d%H%M%S')
-    archive_name = latest_file.replace('.csv', f'_{ts}.csv')
-    smbclient.rename(latest_path, os.path.join(acumen_archive_path, archive_name))
-    print(f"Loaded new data and archived file: {archive_name}")
-    return datetime.now().strftime('%Y-%m-%d')
+	JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+	ON MBR.PlanID = PLN.PlanID
+	AND MBR.PBP = PLN.PBPID
 
-def run_sar_queries(config, execution_date, td_engine):
-    import numpy as np
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '1'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+	ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = PhyADDR.MemCodNum
 
-    with td_engine.connect() as conn:
-        with open(config['sql_path']) as f:
-            extract_sql = f.read()
-        result_df = pd.read_sql(extract_sql, conn)
+	LEFT JOIN (
+	SELECT 
+	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+	WHERE AddressUse = '2'
+	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+	ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+	AND MBR.MemCodNum = MailADDR.MemCodNum
+	
+	LEFT JOIN (
+	select 
+	memcodnum, "value" as SPANSCC  
+	FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+	WHERE spantype = 'SCC'
+	qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+	ON dmg.memcodnum = span.memcodnum
 
-    def get_fallout_comment(row):
-        if row['physicalstate'] != row['countystate']:
-            return f"Fallout, Physical Address State {row['physicalstate']}, SCC State {row['countystate']}"
-        elif pd.isnull(row['MailAddr1']): return 'Fallout, no mailing address'
-        elif pd.isnull(row['Member ID']): return 'Fallout, no member ID'
-        elif pd.isnull(row['FirstName']): return 'Fallout, no first name'
-        elif pd.isnull(row['LastName']): return 'Fallout, no last name'
-        elif pd.isnull(row['MailCity']): return 'Fallout, no mail address city'
-        elif pd.isnull(row['MailState']): return 'Fallout, no mail address state'
-        elif pd.isnull(row['MailZip']): return 'Fallout, no mail address zip'
-        elif pd.isnull(row['Plan Name']): return 'Fallout, no plan name'
-        elif pd.isnull(row['PhyState']): return 'Fallout, no physical address state'
-        elif pd.isnull(row['Material ID']): return 'BOM, Missing Data'
-        elif row['CurrentStatus'] == 'Not Enrolled': return 'Do not report, not enrolled'
-        elif row['CurrentStatus'] == 'Pending' and pd.to_datetime(row['LatestEffectiveDate'][:10]) < pd.to_datetime('today') and pd.isnull(row['Span_EffDate']):
-            return 'Do not report, member effective date is in the past, has no span and is considered canceled'
-        elif row['CurrentStatus'] == 'Pending' and pd.to_datetime(row['LatestEffectiveDate'][:10]) >= pd.to_datetime('today') and pd.isnull(row['Span_EffDate']):
-            return 'Fallout, member status pending with effective date in future with no span'
-        elif pd.isnull(row['SCCCode']): return 'Fallout, no SCC'
-        else: return 'Valid'
+	JOIN VT_SAR_PLAN SAR
+	ON MBR.PlanID = SAR.Contract
+	AND MBR.PBP = SAR.PBP
+	AND CSegment = SAR.Segment
+	AND SCCCode = SAR.ServiceAreaCountyCode
 
-    result_df['Comments'] = result_df.apply(get_fallout_comment, axis=1)
-    fallout_df = result_df[result_df['Comments'] != 'Valid']
-    valid_df = result_df[result_df['Comments'] == 'Valid']
+	LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+	ON SCCCode = SC.SCC_CODE
+	
+	LEFT JOIN 
+	(
+		SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+	ON SC.State = STREF.STATE_ABBREVIATED_NAME 
 
-    hist_df = pd.read_sql(f"SELECT * FROM {config['history_tracking_table']}", conn)
-    new_records = pd.concat([
-        fallout_df.assign(STATUS_TAG='Fallout'),
-        valid_df[~valid_df['MEMCODNUM'].isin(fallout_df['MEMCODNUM'])].assign(STATUS_TAG='Valid')
-    ])
-    new_records['LOAD_DATE'] = execution_date
-    new_records[['MEMCODNUM', 'Member ID', 'CContract', 'CPBP', 'CSegment', 'STATUS_TAG', 'LOAD_DATE']].to_sql(config['history_tracking_table'], conn, index=False, if_exists='append')
+	LEFT JOIN VT_SAR_NR_BOM_2026 MBOM
+	ON MBR.PlanID = MBOM.Contract
+	AND MBR.PBP = MBOM.PBP
+	AND CSegment = MBOM.Segment
+	AND STREF.STATE_NAME = MBOM.State
+	
+	LEFT JOIN (SELECT * 
+	FROM VT_SAR_NR_BOM_2026 
+	QUALIFY row_number() OVER (PARTITION BY Contract, PBP, Segment Order by State) = 1) MBOMNOST
+	ON MBR.PlanID = MBOMNOST.Contract
+	AND MBR.PBP = MBOMNOST.PBP
+	AND CSegment = MBOMNOST.Segment
+	
+	LEFT JOIN 
+	(
+		SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) MBOMSTREF
+	ON MBOMNOST.State = MBOMSTREF.STATE_NAME ;
+	
+	--SAR Fallout and Exclusion
+select 
+Case 
+when physicalstate <> countystate Then 'Valid, Physical Address State '||physicalstate||', SCC State '||CountyState
+when MailAddr1 is NULL Then 'Fallout, no mailing address'
+when "Member ID" is NULL Then 'Fallout, no member ID'
+when FirstName is NULL Then 'Fallout, no first name'
+when LastName is NULL Then 'Fallout, no last name'
+when MailCity is NULL Then 'Fallout, no mail address city'
+when MailState is NULL Then 'Fallout, no mail address state'
+when MailZip is NULL Then 'Fallout, no mail address zip'
+When "Plan Name" is NULL Then 'Fallout, no plan name'
+When PhyState is NULL Then 'Fallout, no physical address state'
+when "Material ID" is NULL Then 'BOM, Missing Data'
+--when CurrentStatus = 'Not Enrolled' and RIGHT("Member ID",2)='XX' Then 'Do not report, not enrolled'
+when CurrentStatus = 'Not Enrolled' Then 'Do not report, not enrolled'
+when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') < current_date and Span_EffDate IS NULL 
+	Then 'Do not report, member effective date is in the past, has no span and is considered canceled'
+when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') >= current_date and Span_EffDate IS NULL 
+	Then 'Fallout, member status pending with effective date in future with no span'
+when CurrentStatus = 'Pending' Then 'Valid, status pending and effectivedate in future with span'
+when SCCCode is null then 'Fallout, no SCC'
+Else 'Valid' end as Comments,
+SAR.*
+from hslabgrowthrpt.TEST_SAR_AB_VT SAR;
 
-    # File outputs
-    date_tag = datetime.now().strftime('%Y%m%d')
-    for (contract, pbp, segment), group in valid_df.groupby(['CContract', 'CPBP', 'CSegment']):
-        segment_val = segment or '000'
-        fname = f"2026SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment_val}_{date_tag}.csv"
-        group.to_csv(os.path.join(config['acumen_output_path'], fname), sep='\t', index=False)
-
-    for (contract, pbp, segment), group in fallout_df.groupby(['CContract', 'CPBP', 'CSegment']):
-        segment_val = segment or '000'
-        err_fname = f"2026SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment_val}_{date_tag}_error.csv"
-        group.to_csv(os.path.join(config['acumen_output_path'], err_fname), sep='\t', index=False)
-
-    fallout_df.to_csv(os.path.join(config['acumen_output_path'], config['sar_error_file']), index=False)
-    summary = valid_df.groupby(['CContract', 'CPBP', 'CSegment']).size().reset_index(name='Total_Members')
-    summary.columns = ['NewYearContract', 'NewYearPBP', 'NewYearSegment', 'TotalMembership']
-    summary.to_csv(os.path.join(config['acumen_output_path'], config['sar_summary_file']), index=False)
-
-    maildate_dfs = []
-    for file in smbclient.listdir(config['response_files_path']):
-        if file.lower().endswith(".csv") and "MailDate" in file:
-            with smbclient.open_file(os.path.join(config['response_files_path'], file), mode='r') as f:
-                maildate_dfs.append(pd.read_csv(f))
-
-    maildate_ids = set()
-    if maildate_dfs:
-        maildate_all = pd.concat(maildate_dfs, ignore_index=True)
-        maildate_ids = set(maildate_all['Member ID'].astype(str).str.strip().unique())
-
-    recon_df = valid_df[~valid_df['Member ID'].astype(str).str.strip().isin(maildate_ids)][['Member ID', 'RecordID']].drop_duplicates()
-    recon_df.to_csv(os.path.join(config['acumen_output_path'], config['sar_error_file']), index=False)
-
-def prepare_email(acumen_output_path, sar_summary_file, sar_error_file):
-    email_msg = MIMEMultipart()
-    email_msg["Subject"] = f"SAR File Load Summary - {datetime.now().strftime('%Y-%m-%d')}"
-
-    for path in [sar_summary_file, sar_error_file]:
-        full_path = os.path.join(acumen_output_path, path)
-        with open(full_path, 'rb') as f:
-            attach = MIMEApplication(f.read(), _subtype='csv')
-            attach.add_header('Content-Disposition', 'attachment', filename=os.path.basename(path))
-            email_msg.attach(attach)
-
-    body = MIMEText("SAR file processing complete. Attachments contain summary and fallout.", 'plain')
-    email_msg.attach(body)
-
-    return email_msg
-
-
----------------------------------------------------------------------------------------------
-
-from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.configuration import conf
-from airflow.hooks.base_hook import BaseHook
-from airflow.utils.email import send_mime_email
-import os
-
-from utils.sar_utils import check_and_load_file, run_sar_queries, prepare_email, get_td_engine
-
-dag_id = 'sar_file_loader_with_deltas'
-
-# Config
-sar_base_path = r'\\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files'
-acumen_input_path = os.path.join(sar_base_path, 'input/')
-acumen_archive_path = os.path.join(sar_base_path, 'archive/')
-acumen_output_path = os.path.join(sar_base_path, 'output/')
-response_files_path = os.path.join(sar_base_path, 'MailDateResponseFiles')
-sar_summary_file = f"GBSF_MAPD_SAR_Summary_{datetime.now().strftime('%Y%m%d')}.csv"
-sar_error_file = f"GBSF_SAR_MissingMailDate_{datetime.now().strftime('%Y%m%d')}.csv"
-
-td_conn_id = 'oss-teradata'
-target_table = 'SAR_PLAN_INPUT_REFERENCE'
-history_tracking_table = 'HST_SAR_MEMBER_STATUS'
-
-# Secrets
-conn = BaseHook.get_connection('comp_oper_creds')
-user, passwd, host = conn.login, conn.password, conn.host
-td_engine = get_td_engine(user, passwd, host)
-
-config = {
-    'sql_path': '/dags/sql/sar_extract.sql',
-    'history_tracking_table': history_tracking_table,
-    'acumen_output_path': acumen_output_path,
-    'sar_summary_file': sar_summary_file,
-    'sar_error_file': sar_error_file,
-    'response_files_path': response_files_path
-}
-
-def dag_wrapper():
-    execution_date = check_and_load_file(acumen_input_path, acumen_archive_path, target_table, host, user, passwd, td_engine)
-    if execution_date:
-        run_sar_queries(config, execution_date, td_engine)
-
-def email_wrapper():
-    msg = prepare_email(acumen_output_path, sar_summary_file, sar_error_file)
-    send_mime_email(
-        e_from=conf.get("smtp", "SMTP_MAIL_FROM"),
-        e_to='user@example.com',
-        mime_msg=msg
-    )
-
-with DAG(
-    dag_id=dag_id,
-    schedule_interval=None,
-    start_date=datetime(2024, 1, 1),
-    catchup=False,
-    default_args={'retries': 1, 'retry_delay': timedelta(minutes=5)}
-) as dag:
-
-    process_task = PythonOperator(
-        task_id='process_sar_pipeline',
-        python_callable=dag_wrapper
-    )
-
-    email_task = PythonOperator(
-        task_id='email_summary',
-        python_callable=email_wrapper
-    )
-
-    process_task >> email_task
-
-
+                                                                                
+                                                                                
+                                                                                
