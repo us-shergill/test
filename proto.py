@@ -260,6 +260,151 @@ Else 'Valid' end as Comments,
 SAR.*
 from hslabgrowthrpt.TEST_SAR_AB_VT SAR;
 
+---------------------------------------------
+# Databricks notebook source
+# Below exmple notebook allows a user to input their credentials to connect to Teradata
+#
+# A user can then read data from TDV and load into a Databricks table, or load data from a specified Databricks table to a specified Teradata table (and can do it quickly by using Teradata Fastload).
+#
+# Make sure to use a cluster that has the Teradata JDBC Driver installed, as well as the teradatasql python package (all team-level shared clusters have this)
+
+# COMMAND ----------
+
+##############################################################
+# PART 1: ENTERING YOUR CREDENTIALS TO SETUP YOUR CONNECTION #
+##############################################################
+
+# COMMAND ----------
+
+import getpass
+import teradatasql
+
+# COMMAND ----------
+
+username = input("Enter username (personal LAN ID or service account username): ").strip()
+
+# COMMAND ----------
+
+password = getpass.getpass("Enter password for username: ").strip()
+
+# COMMAND ----------
+
+#############################################################
+# PART 2: READING FROM TDV AND SAVING DATA INTO A DBX TABLE #
+#############################################################
+
+# COMMAND ----------
+
+tdv_host = "HSTNTDDEV.HEALTHSPRING.INSIDE"
+connection_string_read = f"jdbc:teradata://{tdv_host}/LOGMECH=LDAP,COLUMN_NAME=ON,TYPE=FASTEXPORT"
+query = "SELECT * FROM REPORTING_DEV2_V.CDO_PROV_DEMG"
+dbx_table = 'reporting.example_tdv_read_cdo_prov_demg'
+
+df = (spark.read
+  .format("jdbc")
+  .option('driver', "com.teradata.jdbc.TeraDriver")
+  .option("url", connection_string_read)
+  .option("query", query)
+  .option("user", username)
+  .option("password", password)
+  .load()
+)
+df.write.mode('overwrite').saveAsTable(dbx_table)
+
+# COMMAND ----------
+
+# Display our data that we have just read in from TDV and saved to DBX table
+saved_table_dataframe = spark.table(dbx_table)
+
+saved_table_dataframe.display()
+
+# COMMAND ----------
+
+############################################################
+# PART 3: WRITING DATA TO TDV USING SPARK AND TDV FASTLOAD #
+############################################################
+
+# COMMAND ----------
+
+target_tdv_table = "REPORTING_DEV2_T.EXAMPLE_TDV_WRITE_CDO_PROV_DEMG"
+connection_string_write_fastload = f"jdbc:teradata://{tdv_host}/LOGMECH=LDAP,FLATTEN=ON,TYPE=FASTLOAD"
+landing_table = f'{target_tdv_table}_WORKING' # Used for staging our data in TDV before moving it to the target table
+
+# COMMAND ----------
+
+def delete_table_if_exists(table_full):
+    try:
+        con = teradatasql.connect(host = tdv_host, user = username, password = password, logmech = "LDAP", encryptdata="true")
+        cursor = con.cursor()
+
+        cursor.execute(f"DROP TABLE {table_full}")
+        print(f"Deleted following table '{table_full}' from TDV.")
+    except Exception as e:
+        print(f"Unable to delete table from TDV: {str(e)[:200]}")
+    finally:
+        cursor.close()
+        con.close()
+
+# COMMAND ----------
+
+# Clean up work table if it exists from a previous load
+delete_table_if_exists(landing_table)
+
+# COMMAND ----------
+
+print(f"Writing to OSS TDV temporary work table '{landing_table}' via FASTLOAD.")
+(
+    saved_table_dataframe.write
+    .format("jdbc")
+    .option('driver', "com.teradata.jdbc.TeraDriver")
+    .option("url", connection_string_write_fastload)
+    .option("dbtable", landing_table)
+    .option("user", username)
+    .option("password", password)
+    .option("batchsize", 50000)
+    .option("numPartitions", 1)
+    .option("truncate", True)
+    .mode("overwrite")
+    .save()
+)
+
+# COMMAND ----------
+
+# Clean up final target table if it exists
+delete_table_if_exists(target_tdv_table)
+
+# COMMAND ----------
+
+# Creates our final target table based on the work table
+# Note: The reason we create a work table first is to ensure our final table can still be queried while the load is happening.
+try:
+    con = teradatasql.connect(host = tdv_host, user = username, password = password, logmech = "LDAP", encryptdata="true")
+    cursor = con.cursor()
+
+    cursor.execute(f"CREATE TABLE {target_tdv_table} AS (SELECT * FROM {landing_table}) WITH DATA")
+    print(f"Created table '{target_tdv_table}' from '{landing_table}'")
+except Exception as e:
+    print(f"Unable to create table '{target_tdv_table}' from '{landing_table}': {str(e)[:200]}")
+finally:
+    cursor.close()
+    con.close()
+
+# COMMAND ----------
+
+###################
+# PART 4: CLEANUP #
+###################
+
+# Clean up TDV work/landing table
+delete_table_if_exists(landing_table)
+
+# Clean up TDV target table
+delete_table_if_exists(target_tdv_table)
+
+# Clean up initial DBX table that we loaded from TDV
+spark.sql(f"DROP TABLE IF EXISTS {dbx_table}")
+
                                                                                 
                                                                                 
                                                                                 
+
