@@ -520,26 +520,44 @@ def process_error_tracking(spark, error_df, is_initial_load=True):
     """
     Manage error tracking table
     For daily runs, check if previously errored members now have complete data
+    Prevents duplicate error records by updating existing ones
     """
     
     # Add processing timestamp
     error_df = error_df.withColumn("ProcessingDate", current_timestamp())
     
     if is_initial_load:
-        # Create or replace error tracking table
+        # Create or replace error tracking table for initial load
+        print(f"Initial load: Creating error tracking table with {error_df.count()} error records")
         error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
     else:
-        # Read existing error tracking table
+        # For incremental loads, handle existing error table properly
         try:
             existing_errors_df = spark.table(ERROR_TRACKING_TABLE)
             
-            # Check if any previously errored members now have complete data
-            # This would be done by joining with the valid records
-            # For now, append new errors
-            error_df.write.mode("append").saveAsTable(ERROR_TRACKING_TABLE)
+            # Remove any existing records for MEMCODNUMs that have new errors
+            # This prevents duplicates - we'll keep the latest error status
+            remaining_existing_errors = existing_errors_df.join(
+                error_df.select("MEMCODNUM").distinct(),
+                "MEMCODNUM",
+                "left_anti"  # Keep only records NOT in new error_df
+            )
             
-        except:
+            # Combine remaining existing errors with new errors
+            # This ensures we have the latest error status for each member
+            updated_errors_df = remaining_existing_errors.unionByName(error_df, allowMissingColumns=True)
+            
+            # Overwrite the error tracking table with updated data
+            print(f"Incremental load: Updating error tracking table")
+            print(f"  - Previous error count: {existing_errors_df.count()}")
+            print(f"  - New errors found: {error_df.count()}")
+            print(f"  - Updated total errors: {updated_errors_df.count()}")
+            
+            updated_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+            
+        except Exception as e:
             # Table doesn't exist, create it
+            print(f"Error tracking table not found, creating new one: {str(e)}")
             error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
     
     return error_df
@@ -708,29 +726,44 @@ def check_and_reprocess_errors(spark, new_valid_df):
     """
     Check if any previously errored members now have complete data
     Returns members that should be processed from the error table
+    Automatically removes fixed members from error tracking table
     """
     try:
         error_tracking_df = spark.table(ERROR_TRACKING_TABLE)
         
+        print(f"Checking {error_tracking_df.count()} previously errored members for fixes...")
+        
         # Join with new valid records to find fixed errors
-        fixed_errors_df = error_tracking_df.join(
+        # These are members who were in error but now have complete data
+        fixed_errors_df = error_tracking_df.drop("ValidationStatus", "ProcessingDate").join(
             new_valid_df,
-            error_tracking_df.MEMCODNUM == new_valid_df.MEMCODNUM,
+            "MEMCODNUM",
             "inner"
         ).select(new_valid_df["*"])
         
+        fixed_count = fixed_errors_df.count()
+        
         # Remove fixed errors from error tracking table
-        if fixed_errors_df.count() > 0:
+        if fixed_count > 0:
+            print(f"Found {fixed_count} previously errored members now fixed")
+            
+            # Keep only members still in error
             remaining_errors_df = error_tracking_df.join(
-                fixed_errors_df,
-                error_tracking_df.MEMCODNUM == fixed_errors_df.MEMCODNUM,
+                fixed_errors_df.select("MEMCODNUM").distinct(),
+                "MEMCODNUM",
                 "left_anti"
             )
+            
+            print(f"Updating error tracking table: {remaining_errors_df.count()} members still in error")
             remaining_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+        else:
+            print("No previously errored members have been fixed")
         
         return fixed_errors_df
         
-    except:
+    except Exception as e:
+        print(f"Error tracking table not found or error in processing: {str(e)}")
+        # Return empty DataFrame with correct schema if table doesn't exist
         return spark.createDataFrame([], new_valid_df.schema)
 
 # COMMAND ----------
