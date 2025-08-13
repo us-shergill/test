@@ -1,200 +1,767 @@
+# Databricks notebook source
+# SAR NR Processing - Vendor Files, Summary Reports, and Reconciliation
+# This script generates daily SAR files based on business requirements
+# Files are created per contract/PBP/segment combination
+# CORRECTED VERSION - Maintains exact SQL logic
+
+import getpass
+import teradatasql
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.window import Window
+from pyspark.sql.types import *
+from datetime import datetime, date
 import os
-import smbclient
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from io import StringIO
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.email_operator import EmailOperator
-from airflow.configuration import conf
-from airflow.hooks.base_hook import BaseHook
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-from email.mime.text import MIMEText
-from airflow.utils.email import send_mime_email
-from sqlalchemy import create_engine, text
 
-# DAG Config
-dag_id = 'sar_file_loader_with_deltas'
-load_env = 'DEV'
-sar_base_path = r'\\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files'
-acumen_input_path = os.path.join(sar_base_path, 'input/')
-acumen_archive_path = os.path.join(sar_base_path, 'archive/')
-acumen_output_path = os.path.join(sar_base_path, 'output/')
-response_files_path = os.path.join(sar_base_path, 'MailDateResponseFiles')
-td_conn_id = 'oss-teradata'
-target_table = 'SAR_PLAN_INPUT_REFERENCE'
-sar_output_table = 'SAR_OUTPUT_TABLE'
-history_tracking_table = 'HST_SAR_MEMBER_STATUS'
-sar_summary_file = 'GBSF_MAPD_SAR_Summary_' + datetime.now().strftime('%Y%m%d') + '.csv'
-sar_error_file = 'GBSF_SAR_MissingMailDate_' + datetime.now().strftime('%Y%m%d') + '.csv'
-EMAIL_SENDER = conf.get("smtp", "SMTP_MAIL_FROM")
-EMAIL_RECIPIENT = 'user@example.com'
+# COMMAND ----------
 
-# Connection credentials
-conn = BaseHook.get_connection('comp_oper_creds')
-user = conn.login
-passwd = conn.password
-host = conn.host
+# Configuration
+CURRENT_YEAR = "2026"
+OUTPUT_BASE_PATH = "/mnt/is/ApplicationData/EXPORT/CardFile/SARS_NR/NextYear_Production_Files"
+MAIL_DATE_RESPONSE_PATH = f"{OUTPUT_BASE_PATH}/MailDateResponseFiles"
+ERROR_TRACKING_TABLE = "core_refdata.sar_nr_error_tracking"
+PROCESSED_MEMBERS_TABLE = "core_refdata.sar_nr_processed_members"
 
-# Helper
-def get_td_engine():
-    td_conn = BaseHook.get_connection(td_conn_id)
-    td_user = td_conn.login
-    td_pass = td_conn.password
-    td_extra = td_conn.extra_dejson
-    td_logmech = td_extra.get("logmech", "TD2")
-    engine_str = f'teradatasql://{td_user}:{td_pass}@{host}/?logmech={td_logmech}&encryptdata=true'
-    return create_engine(engine_str)
+# COMMAND ----------
 
-def check_and_load_file():
-    smbclient.register_session(host, username=user, password=passwd)
-    files = smbclient.listdir(acumen_input_path)
-    input_files = [f for f in files if f.startswith("SAR_PLAN_INPUT") and f.endswith(".csv")]
-    if not input_files:
-        print("No SAR input files found.")
-        return None
-
-    latest_file = max(input_files)
-    latest_path = os.path.join(acumen_input_path, latest_file)
-    with smbclient.open_file(latest_path, mode='r') as f:
-        df = pd.read_csv(f)
-
-    engine = get_td_engine()
-    conn = engine.connect()
-
-    conn.execute(text(f"DELETE FROM {target_table}"))
-    df['LOAD_DT'] = datetime.now().strftime('%Y-%m-%d')
-    df.to_sql(target_table, conn, index=False, if_exists='append')
-    ts = datetime.now().strftime('%Y%m%d%H%M%S')
-    archive_name = latest_file.replace('.csv', f'_{ts}.csv')
-    smbclient.rename(latest_path, os.path.join(acumen_archive_path, archive_name))
-    print(f"Loaded new data and archived file: {archive_name}")
-
-    return datetime.now().strftime('%Y-%m-%d')
-
-def run_sar_queries(execution_date):
-    engine = get_td_engine()
-    conn = engine.connect()
-
-    with open('/dags/sql/sar_extract.sql') as f:
-        extract_sql = f.read()
-
-    result_df = pd.read_sql(extract_sql, conn)
-
-    def get_fallout_comment(row):
-        if row['physicalstate'] != row['countystate']:
-            return f"Fallout, Physical Address State {row['physicalstate']}, SCC State {row['countystate']}"
-        elif pd.isnull(row['MailAddr1']): return 'Fallout, no mailing address'
-        elif pd.isnull(row['Member ID']): return 'Fallout, no member ID'
-        elif pd.isnull(row['FirstName']): return 'Fallout, no first name'
-        elif pd.isnull(row['LastName']): return 'Fallout, no last name'
-        elif pd.isnull(row['MailCity']): return 'Fallout, no mail address city'
-        elif pd.isnull(row['MailState']): return 'Fallout, no mail address state'
-        elif pd.isnull(row['MailZip']): return 'Fallout, no mail address zip'
-        elif pd.isnull(row['Plan Name']): return 'Fallout, no plan name'
-        elif pd.isnull(row['PhyState']): return 'Fallout, no physical address state'
-        elif pd.isnull(row['Material ID']): return 'BOM, Missing Data'
-        elif row['CurrentStatus'] == 'Not Enrolled': return 'Do not report, not enrolled'
-        elif row['CurrentStatus'] == 'Pending' and pd.to_datetime(row['LatestEffectiveDate'][:10]) < pd.to_datetime('today') and pd.isnull(row['Span_EffDate']):
-            return 'Do not report, member effective date is in the past, has no span and is considered canceled'
-        elif row['CurrentStatus'] == 'Pending' and pd.to_datetime(row['LatestEffectiveDate'][:10]) >= pd.to_datetime('today') and pd.isnull(row['Span_EffDate']):
-            return 'Fallout, member status pending with effective date in future with no span'
-        elif pd.isnull(row['SCCCode']): return 'Fallout, no SCC'
-        else: return 'Valid'
-
-    result_df['Comments'] = result_df.apply(get_fallout_comment, axis=1)
-    fallout_df = result_df[result_df['Comments'] != 'Valid']
-    valid_df = result_df[result_df['Comments'] == 'Valid']
-
-    hist_df = pd.read_sql(f"SELECT * FROM {history_tracking_table}", conn)
-    memcodnums_today = set(result_df['MEMCODNUM'].unique())
-    memcodnums_hist = set(hist_df['MEMCODNUM'].unique())
-
-    new_records = pd.concat([
-        fallout_df.assign(STATUS_TAG='Fallout'),
-        valid_df[~valid_df['MEMCODNUM'].isin(fallout_df['MEMCODNUM'])].assign(STATUS_TAG='Valid')
-    ])
-    new_records['LOAD_DATE'] = execution_date
-    new_records[['MEMCODNUM', 'Member ID', 'CContract', 'CPBP', 'CSegment', 'STATUS_TAG', 'LOAD_DATE']].to_sql(history_tracking_table, conn, index=False, if_exists='append')
-
-    date_tag = datetime.now().strftime('%Y%m%d')
-    for (contract, pbp, segment), group in valid_df.groupby(['CContract', 'CPBP', 'CSegment']):
-        segment_val = segment or '000'
-        fname = f"2026SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment_val}_{date_tag}.csv"
-        group.to_csv(os.path.join(acumen_output_path, fname), sep='\t', index=False)
-
-    for (contract, pbp, segment), group in fallout_df.groupby(['CContract', 'CPBP', 'CSegment']):
-        segment_val = segment or '000'
-        err_fname = f"2026SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment_val}_{date_tag}_error.csv"
-        group.to_csv(os.path.join(acumen_output_path, err_fname), sep='\t', index=False)
-
-    fallout_df.to_csv(os.path.join(acumen_output_path, sar_error_file), index=False)
-
-    summary = valid_df.groupby(['CContract', 'CPBP', 'CSegment']).size().reset_index(name='Total_Members')
-    summary.columns = ['NewYearContract', 'NewYearPBP', 'NewYearSegment', 'TotalMembership']
-    summary.to_csv(os.path.join(acumen_output_path, sar_summary_file), index=False)
-
-    # === Reconciliation Report ===
-    maildate_dfs = []
-    for file in smbclient.listdir(response_files_path):
-        if file.lower().endswith(".csv") and "MailDate" in file:
-            with smbclient.open_file(os.path.join(response_files_path, file), mode='r') as f:
-                df = pd.read_csv(f)
-                maildate_dfs.append(df)
-
-    if maildate_dfs:
-        maildate_all = pd.concat(maildate_dfs, ignore_index=True)
-        maildate_ids = set(maildate_all['Member ID'].astype(str).str.strip().unique())
-    else:
-        maildate_ids = set()
-
-    recon_df = valid_df[~valid_df['Member ID'].astype(str).str.strip().isin(maildate_ids)][['Member ID', 'RecordID']].drop_duplicates()
-    recon_df.to_csv(os.path.join(acumen_output_path, sar_error_file), index=False)
-
-    print("SAR extract, fallout, delta tracking, and file generation completed.")
-
-def dag_wrapper():
-    execution_date = check_and_load_file()
-    if execution_date:
-        run_sar_queries(execution_date)
-
-def send_summary_email():
-    email_msg = MIMEMultipart()
-    email_msg["Subject"] = f"SAR File Load Summary - {datetime.now().strftime('%Y-%m-%d')}"
-
-    for path in [sar_summary_file, sar_error_file]:
-        full_path = os.path.join(acumen_output_path, path)
-        with open(full_path, 'rb') as f:
-            attach = MIMEApplication(f.read(), _subtype='csv')
-            attach.add_header('Content-Disposition', 'attachment', filename=os.path.basename(path))
-            email_msg.attach(attach)
-
-    body = MIMEText("SAR file processing complete. Attachments contain summary and fallout.", 'plain')
-    email_msg.attach(body)
-
-    send_mime_email(e_from=EMAIL_SENDER, e_to=EMAIL_RECIPIENT, mime_msg=email_msg)
-
-with DAG(
-    dag_id=dag_id,
-    schedule_interval=None,
-    start_date=datetime(2024, 1, 1),
-    catchup=False,
-    default_args={
-        'retries': 1,
-        'retry_delay': timedelta(minutes=5)
+# Setup Teradata Connection
+def setup_teradata_connection():
+    """Setup Teradata connection with user credentials"""
+    username = input("Enter username (personal LAN ID or service account username): ").strip()
+    password = getpass.getpass("Enter password for username: ").strip()
+    tdv_host = "HSTNTDDEV.HEALTHSPRING.INSIDE"
+    
+    connection_config = {
+        "host": tdv_host,
+        "username": username,
+        "password": password,
+        "connection_string_read": f"jdbc:teradata://{tdv_host}/LOGMECH=LDAP,COLUMN_NAME=ON,TYPE=FASTEXPORT",
+        "driver": "com.teradata.jdbc.TeraDriver"
     }
-) as dag:
+    return connection_config
 
-    process_task = PythonOperator(
-        task_id='process_sar_pipeline',
-        python_callable=dag_wrapper
+# COMMAND ----------
+
+def read_teradata_table(spark, config, query):
+    """Read data from Teradata using provided query"""
+    df = (spark.read
+        .format("jdbc")
+        .option('driver', config["driver"])
+        .option("url", config["connection_string_read"])
+        .option("query", query)
+        .option("user", config["username"])
+        .option("password", config["password"])
+        .load()
     )
+    return df
 
-    email_task = PythonOperator(
-        task_id='email_summary',
-        python_callable=send_summary_email
+# COMMAND ----------
+
+def get_member_data(spark, config, is_initial_load=True):
+    """
+    Extract member data from Teradata and Databricks tables
+    For daily runs after initial load, only get new enrollments
+    EXACTLY MATCHING THE ORIGINAL SQL LOGIC
+    """
+    
+    # EXACT SQL from requirements - extracting all Teradata data first
+    base_query = """
+    SELECT
+        MBR.MEMCODNUM,
+        MBR.MemberID,
+        MBR.CurrentEffDate as LatestEffectiveDate,
+        MBR.TermDate,
+        MBRS.Description as CurrentStatus,
+        DMG.OECCounty,
+        DMG.SCC1 as DMGSCC1,
+        DMG.SCC2 as DMGSCC2,
+        DMG.FirstName,
+        DMG.LastName,
+        PhyADDR.Address1 as PhyAddr1,
+        PhyADDR.Address2 as PhyAddr2,
+        PhyADDR.City as PhyCity,
+        PhyADDR.State as PhyState,
+        CASE 
+            WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+            ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+        END as PhyZip,
+        MailADDR.Address1 as MailAddr1,
+        MailADDR.Address2 as MailAddr2,
+        MailADDR.City as MailCity,
+        MailADDR.State as MailState,
+        CASE 
+            WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+            ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+        END as MailZip,
+        MBR.PlanID as CContract,
+        MBR.PBP as CPBP,
+        COALESCE(EAMSGMNT.SegmentID, MBR.SegmentID, '000') as CSegment,
+        EAMSGMNT.Span_EffDate,
+        EAMSGMNT.Span_TermDate,
+        PLN.ProductName as PlanName,
+        COALESCE(SPAN.SPANSCC, DMG.SCC1) as SCCCode,
+        SPAN.SPANSCC,
+        DMG.SCC1,
+        COALESCE(DMG.Language, 'ENG') as LanguageText,
+        CASE 
+            WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+            WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+            WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+            WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+            ELSE '' 
+        END AS AlternateFormat,
+        SC.CountyName as County,
+        SC.State as CountyState,
+        STREF.STATE_NAME as CountyStateName
+    FROM (
+        SELECT
+            MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+        FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+        WHERE SRC_DATA_KEY = '210'
+            AND CAST(SUBSTR(TermDate, 1, 10) AS DATE FORMAT 'YYYY-MM-DD') > CURRENT_DATE
+    """
+    
+    # Add filter for new enrollments if not initial load (Section 1.3.8)
+    if not is_initial_load:
+        base_query += f"""
+            AND CAST(SUBSTR(CurrentEffDate, 1, 10) AS DATE FORMAT 'YYYY-MM-DD') = CURRENT_DATE
+        """
+    
+    base_query += """
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1
+    ) MBR
+    
+    JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+        ON MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+        AND MBR.MemCodNum = DMG.MemCodNum
+    
+    JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+        ON MBR.MemberStatus = MBRS.Status
+    
+    LEFT JOIN (
+        SELECT 
+            tbe.PlanID,
+            tbe.MemCodNum,
+            tbe.HIC AS SpanMBINumber,
+            tbe.SPANTYPE AS SpanType,
+            tbe.Value AS SpanValue,
+            CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+            CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+            CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+            CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+            tbt.DateCreated AS TR_CREATE_DATE,
+            COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''), 
+                    NULLIF(TRIM(tbe.SEGD_SegmentID), ''), 
+                    NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+            SEGC_startDate, SEGC_EndDate, SEGD_startDate, SEGD_EndDate
+        FROM (
+            SELECT d.Value as SEGD_SegmentID, d.StartDate as SEGD_startDate, 
+                   d.EndDate as SEGD_EndDate, c.* 
+            FROM (
+                SELECT b.Value as SEGC_SegmentID, b.StartDate as SEGC_startDate, 
+                       b.EndDate as SEGC_EndDate, a.* 
+                FROM GBS_FACET_CORE_V.EAM_tbENRLSpans a 
+                LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                    ON a.MemCodNum = b.MemCodNum 
+                    AND a.PlanID = b.PlanID 
+                    AND (b.StartDate BETWEEN a.StartDate AND a.EndDate) 
+                    AND a.SPANTYPE = 'PBP' 
+                    AND b.SPANTYPE = 'SEGC'
+            ) c 
+            LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                ON c.MemCodNum = d.MemCodNum 
+                AND c.PlanID = d.PlanID 
+                AND ((SEGC_startDate IS NOT NULL AND c.SEGC_startDate = d.StartDate) 
+                     OR (SEGC_startDate IS NULL AND c.StartDate = d.StartDate)) 
+                AND c.SPANTYPE = 'PBP' 
+                AND d.SPANTYPE = 'SEGD'
+        ) tbe  
+        LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+            ON tbt.MemCodNum = tbe.MemCodNum
+            AND tbt.PlanID = tbe.PlanID
+            AND tbt.PBPID = tbe.Value
+            AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+            AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+            AND tbt.TransStatus IN (5)
+        WHERE tbe.SpanType = 'PBP'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe.Value 
+                                   ORDER BY Span_EffDate DESC, Span_TermDate DESC) = 1
+    ) EAMSGMNT
+        ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+        AND MBR.PlanID = EAMSGMNT.PlanID
+        AND MBR.PBP = EAMSGMNT.SpanValue
+    
+    JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+        ON MBR.PlanID = PLN.PlanID
+        AND MBR.PBP = PLN.PBPID
+    
+    LEFT JOIN (
+        SELECT MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+        FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+        WHERE AddressUse = '1'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1
+    ) PhyADDR 
+        ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+        AND MBR.MemCodNum = PhyADDR.MemCodNum
+    
+    LEFT JOIN (
+        SELECT MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+        FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+        WHERE AddressUse = '2'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1
+    ) MailADDR 
+        ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+        AND MBR.MemCodNum = MailADDR.MemCodNum
+    
+    LEFT JOIN (
+        SELECT memcodnum, value as SPANSCC  
+        FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+        WHERE spantype = 'SCC'
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY memcodnum ORDER BY startdate DESC) = 1
+    ) SPAN
+        ON DMG.memcodnum = SPAN.memcodnum
+    
+    LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+        ON COALESCE(SPAN.SPANSCC, DMG.SCC1) = SC.SCC_CODE
+    
+    LEFT JOIN (
+        SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME 
+        FROM REFDATA_CORE_V.STATE_COUNTY
+    ) STREF
+        ON SC.State = STREF.STATE_ABBREVIATED_NAME
+    """
+    
+    # Read data from Teradata
+    print("Reading data from Teradata...")
+    td_df = read_teradata_table(spark, config, base_query)
+    
+    # Cache the DataFrame for multiple operations
+    td_df = td_df.cache()
+    
+    # Read SAR Plan data from Databricks (replacing VT_SAR_PLAN)
+    print("Reading SAR Plan data from Databricks...")
+    sar_plan_df = spark.table("core_refdata.sar_plan")
+    
+    # Read BOM data from Databricks (replacing VT_SAR_NR_BOM_2026)
+    print("Reading BOM data from Databricks...")
+    bom_df = spark.table("core_refdata.SAR_NR_BOM_2026")
+    
+    # Join with SAR Plan - EXACTLY as in SQL
+    print("Joining with SAR Plan...")
+    member_df = td_df.join(
+        sar_plan_df,
+        (td_df.CContract == sar_plan_df.Contract) &
+        (td_df.CPBP == sar_plan_df.PBP) &
+        (td_df.CSegment == sar_plan_df.Segment) &
+        (td_df.SCCCode == sar_plan_df.ServiceAreaCountyCode),
+        "inner"
     )
+    
+    # Now we need to replicate the BOM join logic EXACTLY as in SQL
+    # The SQL joins BOM based on STREF.STATE_NAME = MBOM.State
+    
+    # First BOM join - matching on state name (for in-state logic)
+    print("Joining with BOM for in-state records...")
+    bom_instate = bom_df.alias("MBOM")
+    member_df = member_df.join(
+        bom_instate,
+        (member_df.CContract == bom_instate.Contract) &
+        (member_df.CPBP == bom_instate.PBP) &
+        (member_df.CSegment == bom_instate.Segment) &
+        (member_df.CountyStateName == bom_instate.State),  # Join on STATE_NAME not abbreviated
+        "left"
+    ).select(
+        member_df["*"],
+        bom_instate.RecordType.alias("MBOM_RecordType"),
+        bom_instate.LetterMaterialID.alias("MBOM_MaterialID"),
+        bom_instate.PLANReplacementID.alias("MBOM_PlanReplacementID"),
+        bom_instate.State.alias("MBOM_State")
+    )
+    
+    # Second BOM join - for out-of-state (first record per contract/PBP/segment)
+    print("Joining with BOM for out-of-state records...")
+    bom_outstate = (
+        bom_df
+        .withColumn("row_num", row_number().over(
+            Window.partitionBy("Contract", "PBP", "Segment").orderBy("State")
+        ))
+        .filter(col("row_num") == 1)
+        .drop("row_num")
+        .alias("MBOMNOST")
+    )
+    
+    member_df = member_df.join(
+        bom_outstate,
+        (member_df.CContract == bom_outstate.Contract) &
+        (member_df.CPBP == bom_outstate.PBP) &
+        (member_df.CSegment == bom_outstate.Segment),
+        "left"
+    ).select(
+        member_df["*"],
+        bom_outstate.RecordType.alias("MBOMNOST_RecordType"),
+        bom_outstate.LetterMaterialID.alias("MBOMNOST_MaterialID"),
+        bom_outstate.PLANReplacementID.alias("MBOMNOST_PlanReplacementID"),
+        bom_outstate.State.alias("MBOMNOST_State")
+    )
+    
+    # Get STATE_ABBREVIATED_NAME for MBOMNOST.State
+    # Read state county reference again for the MBOMNOST state name lookup
+    state_ref_df = spark.sql("""
+        SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME 
+        FROM REFDATA_CORE_V.STATE_COUNTY
+    """).alias("MBOMSTREF")
+    
+    member_df = member_df.join(
+        state_ref_df,
+        member_df.MBOMNOST_State == state_ref_df.STATE_NAME,
+        "left"
+    ).select(
+        member_df["*"],
+        state_ref_df.STATE_ABBREVIATED_NAME.alias("MBOMNOST_STATE_ABBR")
+    )
+    
+    # Now implement the EXACT logic from SQL for PhysicalState, Plan State, Record Type, Material ID
+    print("Calculating final fields...")
+    
+    # PhysicalState logic - EXACTLY as in SQL
+    # CASE WHEN PhyADDR.State = SC.State THEN PhyADDR.State ELSE MBOMSTREF.STATE_ABBREVIATED_NAME END
+    member_df = member_df.withColumn(
+        "PhysicalState",
+        when(col("PhyState") == col("CountyState"), col("PhyState"))
+        .otherwise(col("MBOMNOST_STATE_ABBR"))
+    )
+    
+    # Plan State logic - EXACTLY as in SQL
+    # CASE WHEN PhyADDR.State = SC.State THEN MBOM.State ELSE MBOMNOST.State END
+    member_df = member_df.withColumn(
+        "Plan State",
+        when(col("PhyState") == col("CountyState"), col("MBOM_State"))
+        .otherwise(col("MBOMNOST_State"))
+    )
+    
+    # Record Type logic
+    member_df = member_df.withColumn(
+        "Record Type",
+        when(col("PhyState") == col("CountyState"), col("MBOM_RecordType"))
+        .otherwise(col("MBOMNOST_RecordType"))
+    )
+    
+    # Material ID logic
+    member_df = member_df.withColumn(
+        "Material ID",
+        when(col("PhyState") == col("CountyState"), col("MBOM_MaterialID"))
+        .otherwise(col("MBOMNOST_MaterialID"))
+    )
+    
+    # Plan Replacement ID logic
+    member_df = member_df.withColumn(
+        "Plan Replacement ID",
+        when(col("PhyState") == col("CountyState"), col("MBOM_PlanReplacementID"))
+        .otherwise(col("MBOMNOST_PlanReplacementID"))
+    )
+    
+    # Add Record ID - EXACTLY as in SQL
+    # MemberID||'_SAR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD'))
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    member_df = member_df.withColumn(
+        "Record ID",
+        concat(col("MemberID"), lit("_SAR_"), lit(current_date_str))
+    )
+    
+    # Select final columns matching EXACTLY the SQL output
+    final_columns = [
+        "MEMCODNUM",
+        col("MemberID").alias("Member ID"),
+        "LatestEffectiveDate",
+        "TermDate", 
+        "CurrentStatus",
+        "OECCounty",
+        "DMGSCC1",
+        "DMGSCC2",
+        "FirstName",
+        "LastName",
+        "PhyAddr1",
+        "PhyAddr2",
+        "PhyCity",
+        "PhyState",
+        "PhyZip",
+        "MailAddr1",
+        "MailAddr2",
+        "MailCity",
+        "MailState",
+        "MailZip",
+        "CContract",
+        "CPBP",
+        "CSegment",
+        "Span_EffDate",
+        "Span_TermDate",
+        col("PlanName").alias("Plan Name"),
+        "SCCCode",
+        "SPANSCC",
+        "DMGSCC1",  # Note: Listed twice in original SQL
+        "LanguageText",
+        col("AlternateFormat").alias("Alternate Format"),
+        "County",
+        "CountyState",
+        "PhysicalState",
+        "Plan State",
+        "Record ID",
+        "Record Type",
+        "Material ID",
+        "Plan Replacement ID"
+    ]
+    
+    result_df = member_df.select(*final_columns)
+    
+    return result_df
 
-    process_task >> email_task
+# COMMAND ----------
+
+def validate_and_split_records(df):
+    """
+    Validate records and split into valid and error dataframes
+    EXACTLY matching the SAR Fallout and Exclusion SQL logic
+    """
+    
+    # Add validation status column - EXACTLY as in the SAR Fallout SQL
+    df_validated = df.withColumn(
+        "ValidationStatus",
+        when(col("PhysicalState") != col("CountyState"), 
+             concat(lit("Valid, Physical Address State "), col("PhysicalState"), 
+                   lit(", SCC State "), col("CountyState")))
+        .when(col("MailAddr1").isNull(), lit("Fallout, no mailing address"))
+        .when(col("Member ID").isNull(), lit("Fallout, no member ID"))
+        .when(col("FirstName").isNull(), lit("Fallout, no first name"))
+        .when(col("LastName").isNull(), lit("Fallout, no last name"))
+        .when(col("MailCity").isNull(), lit("Fallout, no mail address city"))
+        .when(col("MailState").isNull(), lit("Fallout, no mail address state"))
+        .when(col("MailZip").isNull(), lit("Fallout, no mail address zip"))
+        .when(col("Plan Name").isNull(), lit("Fallout, no plan name"))
+        .when(col("PhyState").isNull(), lit("Fallout, no physical address state"))
+        .when(col("Material ID").isNull(), lit("BOM, Missing Data"))
+        .when(col("CurrentStatus") == "Not Enrolled", lit("Do not report, not enrolled"))
+        .when(
+            (col("CurrentStatus") == "Pending") & 
+            (to_date(substring(col("LatestEffectiveDate"), 1, 10), "yyyy-MM-dd") < current_date()) & 
+            (col("Span_EffDate").isNull()),
+            lit("Do not report, member effective date is in the past, has no span and is considered canceled")
+        )
+        .when(
+            (col("CurrentStatus") == "Pending") & 
+            (to_date(substring(col("LatestEffectiveDate"), 1, 10), "yyyy-MM-dd") >= current_date()) & 
+            (col("Span_EffDate").isNull()),
+            lit("Fallout, member status pending with effective date in future with no span")
+        )
+        .when(col("CurrentStatus") == "Pending", 
+              lit("Valid, status pending and effectivedate in future with span"))
+        .when(col("SCCCode").isNull(), lit("Fallout, no SCC"))
+        .otherwise(lit("Valid"))
+    )
+    
+    # Split into valid and error records
+    valid_df = df_validated.filter(
+        (col("ValidationStatus") == "Valid") | 
+        (col("ValidationStatus").startswith("Valid,"))
+    ).drop("ValidationStatus")
+    
+    error_df = df_validated.filter(
+        (col("ValidationStatus").startswith("Fallout")) | 
+        (col("ValidationStatus").startswith("BOM")) |
+        (col("ValidationStatus").startswith("Do not report"))
+    )
+    
+    return valid_df, error_df
+
+# COMMAND ----------
+
+def process_error_tracking(spark, error_df, is_initial_load=True):
+    """
+    Manage error tracking table
+    For daily runs, check if previously errored members now have complete data
+    """
+    
+    # Add processing timestamp
+    error_df = error_df.withColumn("ProcessingDate", current_timestamp())
+    
+    if is_initial_load:
+        # Create or replace error tracking table
+        error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+    else:
+        # Read existing error tracking table
+        try:
+            existing_errors_df = spark.table(ERROR_TRACKING_TABLE)
+            
+            # Check if any previously errored members now have complete data
+            # This would be done by joining with the valid records
+            # For now, append new errors
+            error_df.write.mode("append").saveAsTable(ERROR_TRACKING_TABLE)
+            
+        except:
+            # Table doesn't exist, create it
+            error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+    
+    return error_df
+
+# COMMAND ----------
+
+def generate_vendor_files(valid_df, error_df, output_path):
+    """
+    Generate vendor files per Contract/PBP/Segment combination
+    Following business requirements 1.1 - 1.3
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Get unique combinations of Contract, PBP, and Segment
+    combinations = valid_df.select("CContract", "CPBP", "CSegment").distinct().collect()
+    
+    files_generated = []
+    
+    for row in combinations:
+        contract = row["CContract"]
+        pbp = row["CPBP"]
+        # Handle null/blank segment as per requirement 1.2.1.2
+        segment = row["CSegment"] if row["CSegment"] and row["CSegment"] != "" else "000"
+        
+        # Filter data for this combination
+        subset_df = valid_df.filter(
+            (col("CContract") == contract) & 
+            (col("CPBP") == pbp) & 
+            (col("CSegment") == segment)
+        )
+        
+        # Generate filename as per requirement 1.2.1
+        filename = f"{CURRENT_YEAR}SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}.csv"
+        file_path = f"{output_path}/{filename}"
+        
+        # Write to CSV with tab delimiter as per requirement 1.1.2
+        subset_df.coalesce(1).write.mode("overwrite").option("delimiter", "\t").option("header", "true").csv(file_path)
+        
+        files_generated.append({
+            "Contract": contract,
+            "PBP": pbp,
+            "Segment": segment,
+            "RecordCount": subset_df.count(),
+            "FileName": filename
+        })
+    
+    # Generate error files for each combination with errors (requirement 1.3.6)
+    if error_df.count() > 0:
+        error_combinations = error_df.select("CContract", "CPBP", "CSegment").distinct().collect()
+        
+        for row in error_combinations:
+            contract = row["CContract"] if row["CContract"] else "UNKNOWN"
+            pbp = row["CPBP"] if row["CPBP"] else "UNKNOWN"
+            segment = row["CSegment"] if row["CSegment"] and row["CSegment"] != "" else "000"
+            
+            # Filter error data for this combination
+            error_subset_df = error_df.filter(
+                ((col("CContract") == contract) | col("CContract").isNull()) & 
+                ((col("CPBP") == pbp) | col("CPBP").isNull()) & 
+                ((col("CSegment") == segment) | col("CSegment").isNull())
+            )
+            
+            # Generate error filename
+            error_filename = f"{CURRENT_YEAR}SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}_error.csv"
+            error_file_path = f"{output_path}/{error_filename}"
+            
+            # Write error file with validation status
+            error_subset_df.coalesce(1).write.mode("overwrite").option("delimiter", "\t").option("header", "true").csv(error_file_path)
+            
+            files_generated.append({
+                "Contract": contract,
+                "PBP": pbp,
+                "Segment": segment,
+                "RecordCount": error_subset_df.count(),
+                "FileName": error_filename,
+                "Type": "ERROR"
+            })
+    
+    return files_generated
+
+# COMMAND ----------
+
+def generate_summary_report(valid_df, output_path):
+    """
+    Generate summary report with counts by Contract/PBP/Segment
+    Following business requirements 2.1 - 2.4
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Group by Contract, PBP, and Segment and count (requirement 2.3.1)
+    summary_df = valid_df.groupBy("CContract", "CPBP", "CSegment").agg(
+        count("*").alias("TotalCount")
+    ).withColumnRenamed("CContract", "New year Contract") \
+     .withColumnRenamed("CPBP", "New year PBP") \
+     .withColumnRenamed("CSegment", "New Year Segment") \
+     .withColumnRenamed("TotalCount", "Total count of membership")
+    
+    # Generate filename as per requirement 2.2.1
+    summary_filename = f"GBSF_MAPD_SAR_Summary_{current_date_str}.csv"
+    summary_file_path = f"{output_path}/{summary_filename}"
+    
+    # Write summary report as CSV (requirement 2.1.1)
+    summary_df.coalesce(1).write.mode("overwrite").option("header", "true").csv(summary_file_path)
+    
+    return summary_filename, summary_df.count()
+
+# COMMAND ----------
+
+def generate_reconciliation_report(spark, vendor_response_path, output_path):
+    """
+    Generate reconciliation report comparing vendor mail dates with outbound files
+    Following business requirements 3.1 - 3.3
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    try:
+        # Read vendor response files with mail dates
+        vendor_response_df = spark.read.option("delimiter", "\t").option("header", "true").csv(f"{vendor_response_path}/*.csv")
+        
+        # Read processed members table
+        processed_df = spark.table(PROCESSED_MEMBERS_TABLE)
+        
+        # Find members without mail dates (requirement 3.3.2)
+        missing_mail_date_df = processed_df.join(
+            vendor_response_df,
+            processed_df["Record ID"] == vendor_response_df["Record ID"],
+            "left_anti"
+        ).select("Member ID", "Record ID")
+        
+        # Generate reconciliation report filename as per requirement 3.2.1
+        recon_filename = f"GBSF_SAR_MissingMailDate_{current_date_str}.csv"
+        recon_file_path = f"{MAIL_DATE_RESPONSE_PATH}/{recon_filename}"
+        
+        # Write reconciliation report as CSV (requirement 3.1.1)
+        missing_mail_date_df.coalesce(1).write.mode("overwrite").option("header", "true").csv(recon_file_path)
+        
+        return recon_filename, missing_mail_date_df.count()
+        
+    except Exception as e:
+        print(f"Reconciliation report generation skipped: {str(e)}")
+        return None, 0
+
+# COMMAND ----------
+
+def track_processed_members(spark, valid_df, is_initial_load=True):
+    """
+    Track processed members for reconciliation and duplicate prevention
+    """
+    processed_df = valid_df.select(
+        "MEMCODNUM",
+        "Member ID",
+        "Record ID",
+        "CContract",
+        "CPBP",
+        "CSegment"
+    ).withColumn("ProcessedDate", current_timestamp())
+    
+    if is_initial_load:
+        processed_df.write.mode("overwrite").saveAsTable(PROCESSED_MEMBERS_TABLE)
+    else:
+        processed_df.write.mode("append").saveAsTable(PROCESSED_MEMBERS_TABLE)
+
+# COMMAND ----------
+
+def check_and_reprocess_errors(spark, new_valid_df):
+    """
+    Check if any previously errored members now have complete data
+    Returns members that should be processed from the error table
+    """
+    try:
+        error_tracking_df = spark.table(ERROR_TRACKING_TABLE)
+        
+        # Join with new valid records to find fixed errors
+        fixed_errors_df = error_tracking_df.join(
+            new_valid_df,
+            error_tracking_df.MEMCODNUM == new_valid_df.MEMCODNUM,
+            "inner"
+        ).select(new_valid_df["*"])
+        
+        # Remove fixed errors from error tracking table
+        if fixed_errors_df.count() > 0:
+            remaining_errors_df = error_tracking_df.join(
+                fixed_errors_df,
+                error_tracking_df.MEMCODNUM == fixed_errors_df.MEMCODNUM,
+                "left_anti"
+            )
+            remaining_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+        
+        return fixed_errors_df
+        
+    except:
+        return spark.createDataFrame([], new_valid_df.schema)
+
+# COMMAND ----------
+
+def main():
+    """
+    Main processing function
+    """
+    spark = SparkSession.builder.appName("SAR_NR_Processing").getOrCreate()
+    
+    # Setup Teradata connection
+    print("Setting up Teradata connection...")
+    td_config = setup_teradata_connection()
+    
+    # Determine if this is initial load or daily incremental
+    is_initial_load = input("Is this an initial load? (yes/no): ").strip().lower() == "yes"
+    
+    print(f"Processing {'initial' if is_initial_load else 'incremental'} load...")
+    
+    # Get member data
+    print("Extracting member data...")
+    member_df = get_member_data(spark, td_config, is_initial_load)
+    
+    # Validate and split records
+    print("Validating records...")
+    valid_df, error_df = validate_and_split_records(member_df)
+    
+    print(f"Valid records: {valid_df.count()}")
+    print(f"Error records: {error_df.count()}")
+    
+    # For daily runs, check if any errored members are now fixed
+    if not is_initial_load:
+        print("Checking for fixed errors from previous runs...")
+        fixed_df = check_and_reprocess_errors(spark, valid_df)
+        if fixed_df.count() > 0:
+            print(f"Found {fixed_df.count()} previously errored members now fixed")
+            valid_df = valid_df.union(fixed_df)
+    
+    # Track error records
+    print("Tracking error records...")
+    process_error_tracking(spark, error_df, is_initial_load)
+    
+    # Generate vendor files
+    print("Generating vendor files...")
+    files_info = generate_vendor_files(valid_df, error_df, OUTPUT_BASE_PATH)
+    
+    print(f"Generated {len(files_info)} files")
+    for file_info in files_info:
+        file_type = file_info.get('Type', 'VALID')
+        print(f"  - {file_info['FileName']}: {file_info['RecordCount']} records ({file_type})")
+    
+    # Generate summary report
+    print("Generating summary report...")
+    summary_file, summary_count = generate_summary_report(valid_df, OUTPUT_BASE_PATH)
+    print(f"Summary report: {summary_file} with {summary_count} contract/PBP/segment combinations")
+    
+    # Track processed members
+    print("Tracking processed members...")
+    track_processed_members(spark, valid_df, is_initial_load)
+    
+    # Generate reconciliation report (if vendor response files are available)
+    print("Attempting to generate reconciliation report...")
+    recon_file, missing_count = generate_reconciliation_report(
+        spark, 
+        MAIL_DATE_RESPONSE_PATH, 
+        OUTPUT_BASE_PATH
+    )
+    if recon_file:
+        print(f"Reconciliation report: {recon_file} with {missing_count} missing mail dates")
+    
+    print("Processing complete!")
+
+# COMMAND ----------
+
+if __name__ == "__main__":
+    main()
