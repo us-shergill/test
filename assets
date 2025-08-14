@@ -1,958 +1,203 @@
-All reports and file locations to be stored here: \\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files\MailDateResponseFiles
-SAR Plan
-
-
---2026SAR_Mailing_Fulfillment_Contract_PBP_Segment_CCYYMMDD.csv
---Extract SQL work in progress
-SELECT
-MBR.MEMCODNUM --N/A
-,MBR.MemberID as "Member ID"
-,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
-,MBR.TermDate as TermDate --N/A
-,MBRS.Description as CurrentStatus --N/A 
-,DMG.OECCounty --N/A
-,DMG.SCC1 as DMGSCC1 --N/A
-,DMG.SCC2 as DMGSCC2 --N/A
-,DMG.FirstName as FirstName
-,DMG.LastName as LastName
-,PhyADDR.Address1 as PhyAddr1 --N/A
-,PhyADDR.Address2 as PhyAddr2 --N/A
-,PhyADDR.City as PhyCity --N/A
-,PhyADDR.State as PhyState --N/A
-,CASE 
-  WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
-  ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
- END as PhyZip --N/A
-,MailADDR.Address1 as MailAddr1
-,MailADDR.Address2 as MailAddr2
-,MailADDR.City as MailCity
-,MailADDR.State as MailState
-,CASE 
-  WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
-  ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
- END as MailZip
-,MBR.PlanID as CContract
-,MBR.PBP as CPBP
-,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
-,EAMSGMNT.Span_EffDate
-,EAMSGMNT.Span_TermDate
-,PLN.ProductName as "Plan Name"
-,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
-,SPAN.SPANSCC --N/A 
-,DMG.SCC1 --N/A 
-,COALESCE(DMG."Language",'ENG') as LanguageText
-,CASE 
-	WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
-	WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
-	WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
-	WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
-	ELSE '' 
-	END AS "Alternate Format"
-,SC.CountyName as County
-,PhyADDR.State as PhysicalState
-,SC.State as CountyState --N/A
-,MBOM.State as "Plan State"
-,MemberID||'_SAR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
-,MBOM.RecordType as "Record Type"
-,MBOM.LetterMaterialID as "Material ID"
-,MBOM.PLANReplacementID as "Plan Replacement ID"
-
-FROM (
-	SELECT
-	MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
-	FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
-	WHERE SRC_DATA_KEY = '210'
-	and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
-	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
-
-	JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
-	ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
-	AND MBR.MemCodNum = DMG.MemCodNum
-	--AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
-
-	JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
-	ON MBR.MemberStatus = MBRS.Status
-	--AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
-	
-	LEFT JOIN 
-	(
-		Select 
-				tbe.PlanID,
-				tbe.MemCodNum,
-				tbe.HIC AS SpanMBINumber,
-				tbe.SPANTYPE AS SpanType,
-				tbe."Value" AS SpanValue,
-				CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
-				CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
-				CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
-				CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
-				Tbt.DateCreated AS TR_CREATE_DATE,
-				--SegmentId population preference: SEGC, SEGD, Transactions, Default000
-				COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
-				SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
-                   FROM (
-                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
-                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
-                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
-                          a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
-                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
-               LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
-                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
-                     ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
-                                        ON tbt.MemCodNum = tbe.MemCodNum
-                                          AND tbt.PlanID = tbe.PlanID
-                                          AND tbt.PBPID = tbe."Value"
-                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
-                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
-                                          AND tbt.TransStatus IN (5)
-                                          WHERE tbe.SpanType = 'PBP'
-                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
-                                          ) EAMSGMNT
-										  
-	ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
-	AND MBR.PlanID = EAMSGMNT.PlanID
-	AND MBR.PBP = EAMSGMNT.SpanValue
-
-	JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
-	ON MBR.PlanID = PLN.PlanID
-	AND MBR.PBP = PLN.PBPID
-
-	LEFT JOIN (
-	SELECT 
-	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
-	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
-	WHERE AddressUse = '1'
-	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
-	ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
-	AND MBR.MemCodNum = PhyADDR.MemCodNum
-
-	LEFT JOIN (
-	SELECT 
-	MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
-	FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
-	WHERE AddressUse = '2'
-	QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
-	ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
-	AND MBR.MemCodNum = MailADDR.MemCodNum
-	
-	LEFT JOIN (
-	select 
-	memcodnum, "value" as SPANSCC  
-	FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
-	WHERE spantype = 'SCC'
-	qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
-	ON dmg.memcodnum = span.memcodnum
-
-	JOIN VT_SAR_PLAN SAR
-	ON MBR.PlanID = SAR.Contract
-	AND MBR.PBP = SAR.PBP
-	AND CSegment = SAR.Segment
-	AND SCCCode = SAR.ServiceAreaCountyCode
-
-	LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
-	ON SCCCode = SC.SCC_CODE
-	
-	LEFT JOIN 
-	(
-		SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
-	ON SC.State = STREF.STATE_ABBREVIATED_NAME 
-
-	LEFT JOIN VT_SAR_NR_BOM_2026 MBOM
-	ON MBR.PlanID = MBOM.Contract
-	AND MBR.PBP = MBOM.PBP
-	AND CSegment = MBOM.Segment
-	AND STREF.STATE_NAME = MBOM.State;
-	
-	--SAR Fallout and Exclusion
-select 
-Case 
-when physicalstate <> countystate Then 'Fallout, Physical Address State '||physicalstate||', SCC State '||CountyState
-when MailAddr1 is NULL Then 'Fallout, no mailing address'
-when "Member ID" is NULL Then 'Fallout, no member ID'
-when FirstName is NULL Then 'Fallout, no first name'
-when LastName is NULL Then 'Fallout, no last name'
-when MailCity is NULL Then 'Fallout, no mail address city'
-when MailState is NULL Then 'Fallout, no mail address state'
-when MailZip is NULL Then 'Fallout, no mail address zip'
-When "Plan Name" is NULL Then 'Fallout, no plan name'
-When PhyState is NULL Then 'Fallout, no physical address state'
-when "Material ID" is NULL Then 'BOM, Missing Data'
---when CurrentStatus = 'Not Enrolled' and RIGHT("Member ID",2)='XX' Then 'Do not report, not enrolled'
-when CurrentStatus = 'Not Enrolled' Then 'Do not report, not enrolled'
-when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') < current_date and Span_EffDate IS NULL 
-	Then 'Do not report, member effective date is in the past, has no span and is considered canceled'
-when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') >= current_date and Span_EffDate IS NULL 
-	Then 'Fallout, member status pending with effective date in future with no span'
-when CurrentStatus = 'Pending' Then 'Valid, status pending and effectivedate in future with span'
-when SCCCode is null then 'Fallout, no SCC'
-Else 'Valid' end as Comments,
-SAR.*
-from hslabgrowthrpt.TEST_SAR_AB_VT SAR;
-
-
-2. Development end to end
-               Extract process - Udai
-                              - Source Tables are in Teradata
-                              - Target tables to be created in Teradata - Udai
-                              - Target DB/Schema? - Udai
-                              - DDL
-               - Loading the target table/ETL - Python code - Udai
-               - Scheduler
-                              - Airflow - Udai
-                              - Frequency - Daily, Time (TBD)
-               - File delivery
-                              - Python target path to business location (BRD)
-                              - SFTP/B2B???
-                              - S3?
-
-
-import logging
-from datetime import datetime, timedelta
-
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.models import Variable
-from airflow.operators.bash import BashOperator
-from airflow.operators.email_operator import EmailOperator
-from oss_airflow_integrations.snow import snow_integrations
-from airflow.utils.email import send_email
-from airflow.exceptions import AirflowNotFoundException
-
-import oss_etl_library.airflow as oss
-
-logger = logging.getLogger(__name__)
-
-# Variables
-dag_id = 'OSSTDV_Ingest_CSB_MAIL_FILE_SALES_INCR'
-
-dag_config = Variable.get(dag_id, deserialize_json=True)
-
-py_ssh_conn_var = dag_config['py_ssh_conn_var']
-td_conn_var = dag_config['td_conn_var']
-load_env = dag_config['load_env']
-schedule_cron = dag_config['schedule_interval']
-email_recipient = dag_config['email_recipient']
-etl_procs_grp_ids = dag_config['etl_procs_grp_ids']
-indirect_file_path = dag_config['indirect_file_path']
-td_conn_id = dag_config['td_conn_var']
-retry_interval = dag_config["smb_sensor_retry"]
-python_server_file_path = dag_config['python_server_file_path']
-python_server_conn_var_name = dag_config['smb_connection_var']
-curr_date = datetime.now()
-
-# Email vars
-success_email_body = f"""
-{dag_id} Data successfully loaded for date: {curr_date}
-"""
-fail_email_body = f"""
-{dag_id} Failed while loading Data for date: {curr_date}
-"""
-
-def createTicket(context):
-    assignment_group = "D&AE - EDE Govt Sales Marketing & Growth"
-    snow_data = snow_integrations.create_incident(context,assignment_group)
-
-    html_content =fail_email_body
-    subject = f"Airflow {load_env} Failure: {dag_id} DAG"
-    send_email(to=email_recipient, subject=subject, html_content=html_content)
-    return
-
-default_args = {
-    'owner': 'oss',
-    'description': "Dag to load the CSB MAIL FILE C1 Data",
-    'depends_on_past': False,
-    'start_date': datetime(2017, 8, 25),
-    'email_on_failure': True,
-    'email_on_retry': True,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
-    'on_failure_callback': createTicket
-}
-
-def checking_for_file(file_server_conn_id):
-    """
-    Checking for File to Load
-    """
-    global_vars = {}
-    global_vars = oss.airflow_connect.RemoteConnection.smb_establish_conn(file_server_conn_id, global_vars)
-    client = global_vars["SMB_CLIENT"]
-    home_dir = global_vars["SRC_FILE_HOME_DIR"]
-
-    files = client.listdir(f"{home_dir}\\{indirect_file_path}")
-    print("files", files)
-    csb_files = [file for file in files if 'nds0001i.26833.C383' and '.txt' in file]
-    
-    if len(csb_files) > 0:
-        print("Following files will be loaded :")
-        for file in csb_files:
-            logger.info(f"file name: {file}")
-    else:
-        raise AirflowNotFoundException("No compatible file found")
-    
-
-def load_file_to_db(db_conn_id, py_conn_id, file_server_conn_id, etl_procs_grp_ids):
-    """
-    Perform File to Database Load
-    """
-    
-    for etl_procs_grp_id in etl_procs_grp_ids:
-        global_vars = {}
-        global_vars = oss.airflow_connect.RemoteConnection.ssh_establish_conn(py_conn_id, global_vars)
-        global_vars = oss.airflow_connect.RemoteConnection.smb_establish_conn(file_server_conn_id, global_vars)
-       
-        logger.info(f"etl_procs_grp_id: {etl_procs_grp_id}")
-        global_vars["ETL_PROCS_GRP_ID"] = etl_procs_grp_id
-
-        config_data = oss.airflow_connect.DatabaseConnection.set_config_file(db_conn_id)
-
-        td_conn, global_vars, source_dict = oss.Src_FileLoad.Wrapper_FileToCoreLoad(db_conn_id, etl_procs_grp_id, config_data, global_vars)
-
-
-def archive_file(file_server_conn_id):
-    '''
-    Archive the csv file to the nested Archive folder
-    '''
-    global_vars = {}
-    # global_vars["ETL_PROCS_GRP_ID"] = etl_procs_grp_id
-    global_vars = oss.airflow_connect.RemoteConnection.smb_establish_conn(file_server_conn_id, global_vars)
-
-    client = global_vars["SMB_CLIENT"]
-    home_dir = global_vars["SRC_FILE_HOME_DIR"]
-
-    for file_info in client.scandir(f"{home_dir}\\{indirect_file_path}"):
-        if file_info.is_file() and file_info.name.endswith('.txt') and 'nds0001i.26833.C383' in file_info.name:
-            file_path = f"\{home_dir}\\{indirect_file_path}{file_info.name}"
-            archive_file_path = f"\{home_dir}\\{indirect_file_path}Archive\\{file_info.name}"
-            print(f"file_path: {file_path}")
-            print(f"archive_file_path: {archive_file_path}")
-            dstfile = client.open_file(archive_file_path, mode="w")
-            with client.open_file(file_path) as srcfile:
-                dstfile.write(srcfile.read())
-            dstfile.close()
-            srcfile.close()
-            client.remove(file_path)
-
-
-with DAG(
-    dag_id=dag_id,
-    default_args=default_args,
-    schedule_interval=schedule_cron,
-    catchup=False,
-    max_active_runs=1,
-    tags=['oss', 'dae_titans', 'sales']) as dag:
-
-    starting_workflow = BashOperator(
-        task_id="starting_workflow",
-        bash_command="echo Starting Workflow!",
-        dag=dag
-    )
-
-    check_for_file = PythonOperator(
-        task_id='check_for_file',
-        dag=dag,
-        python_callable=checking_for_file, #defined locally
-        op_kwargs={"file_server_conn_id": python_server_conn_var_name}
-    )
-
-    td_file_to_core_load = PythonOperator(
-        task_id='td_file_to_core_load',
-        dag=dag,
-        python_callable=load_file_to_db, #defined locally
-        op_kwargs={"db_conn_id": td_conn_var,
-                   "py_conn_id": py_ssh_conn_var,
-                   "file_server_conn_id": python_server_conn_var_name,
-                   "etl_procs_grp_ids": etl_procs_grp_ids}
-    )
-
-    archive_the_file = PythonOperator(
-        task_id="archive_the_file",
-        dag=dag,
-        python_callable=archive_file,
-        op_kwargs={"file_server_conn_id": python_server_conn_var_name}
-    )
-
-    success_email = EmailOperator(
-        task_id='success_email',
-        to=email_recipient,
-        subject=f"Airflow {load_env} Success: {dag_id} DAG",
-        html_content=success_email_body,
-        trigger_rule='all_success',
-        dag=dag
-    )
-
-    failure_email = EmailOperator(
-        task_id='failure_email',
-        to=email_recipient,
-        subject=f"Airflow {load_env} Failure: {dag_id} DAG",
-        html_content=fail_email_body,
-        trigger_rule='one_failed',
-        dag=dag
-    ) 
-
-starting_workflow >> check_for_file >> td_file_to_core_load >> archive_the_file >> [success_email, failure_email]
-
-
-
---------------------------
-import airflow
-import os
-import shutil
-import smbclient
-import zipfile
-import pathlib
-import glob
-import json
-import pandas as pd
-import numpy as np
-
-from airflow import DAG
-from airflow.configuration import conf
-from airflow.operators.python import PythonOperator
-from datetime import datetime, timedelta
-from airflow.hooks.base_hook import BaseHook
-from airflow_connect import *
-from airflow.models import Variable
-from airflow.operators.bash import BashOperator
-from airflow.operators.dummy import DummyOperator
-from airflow.operators.email_operator import EmailOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
-from airflow.utils.email import send_mime_email
-from dags.SMBSensor import SMBSensor
-from zipfile import ZipFile
-from sqlalchemy import create_engine
-
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
-from email.mime.text import MIMEText
-from oss_airflow_integrations.snow import snow_integrations
-
-from typing import Union, List
-
-import oss_etl_library_acumen as oss
-
-logger = logging.getLogger(__name__)
-
-# Variables
-dag_id = 'acumen_load_oss'
-
-dag_config = Variable.get('acumen_config1_var', deserialize_json=True)
-
-wdc_comp_oper_nas_var = dag_config['wdc_comp_oper_nas_var']
-load_env = dag_config['load_env']
-schedule_cron = dag_config['schedule_interval']
-unzip_file_path = dag_config['unzip_file_path']
-comp_oper_file_path = dag_config['comp_oper_file_path']
-acumen_input_path = dag_config['acumen_input_path']
-acumen_incoming_path = dag_config['acumen_incoming_path']
-acumen_archive_path = dag_config['acumen_archive_path']
-curr_date = datetime.now()
-python_server_file_path = dag_config['python_server_file_path']
-TD_Server = dag_config['TD_Server']
-Load_env = dag_config['load_env']
-EMAIL_SENDER = conf.get("smtp", "SMTP_MAIL_FROM")
-EMAIL_RECIPIENT = dag_config['email_recipient']
-assignment_group = dag_config['assignment_group']
-
-
-# Python server Connection Variables
-python_server_conn_var_name = dag_config['python_server_conn_var_name']
-python_server_connection = BaseHook.get_connection(python_server_conn_var_name)
-python_server = python_server_connection.host
-python_server_uid = python_server_connection.login
-python_server_pwd = python_server_connection.password
-
-#COMP_OPER connection variables
-conn_id = "comp_oper_creds"
-conn = BaseHook.get_connection(conn_id) 
-user = conn.login
-passwd = conn.password
-extra = conn.extra_dejson
-host = conn.host
-today = datetime.now()
-
-if Load_env == 'DEV':
-    td_env = '_DEV'
-elif Load_env == 'QA':
-    td_env = '_QA'
-elif Load_env == 'INT':
-    td_env = 'INT'
-else :
-    td_env = ''
-
-#acumen_input_path_var = Variable.get("acumen_input_path_var")
-#acumen_incoming_path_var = Variable.get("acumen_incoming_path_var")
-
-# Email vars
-#success_email_body = f"""
-#{dag_id} Data successfully loaded for date: {curr_date}
-#"""
-#fail_email_body = f"""
-#{dag_id} Failed while loading Data for date: {curr_date}
-#"""
-
-default_args = {
-    'owner': 'oss',
-	'description': f"Dag to load the data into Acumen tables",
-    'depends_on_past': False,
-    'start_date': datetime(2017, 11, 14),
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 0,
-    'retry_delay': timedelta(minutes=5),
-}
-
-def failure_alert_ticket(context):
-    snow_data = snow_integrations.create_incident(context,assignment_group)
-    return
-
-default_args['on_failure_callback'] = failure_alert_ticket
-
-# Define a function to extract zip files recursively
-def extract_zip_files(acumen_input_path, acumen_incoming_path):
-# Set up connection to the NAS using smbclient
-    smbclient.register_session(host, username=user, password=passwd)
-    files = smbclient.listdir(acumen_input_path)
-    files = [file for file in files if '.zip' in file]
-    print("Input Path :", acumen_input_path)
-    print("Zip Files :", files)
-
-    temp = os.path.join(os.environ['HOME'],'temp')
-    try:
-        os.mkdir(temp)
-    except Exception as e:
-        print("Folder Exists : ", e)
-    print("Temp dir :", temp)
-
-    # specifying the zip file name
-    for i in files:
-        local_file = os.path.join(temp, i)
-        #Downloading the Zip File to local server
-        with smbclient.open_file(os.path.join(acumen_input_path, i), mode="rb") as fr:
-            fw = open(local_file, 'wb')
-            fw.write(fr.read())
-            fw.close()
-
-        # Skip 0B files
-        if os.path.getsize(local_file) == 0:
-            continue
-
-        print("Local File :", local_file)
-        print("Level 1: Extracting zip file : ", local_file)
-        level1_path = os.path.join(temp, i[:-4])
-        print("Unzip file location :", level1_path)
-        with ZipFile(local_file, 'r') as zip:
-            zip.extractall(level1_path)
-
-        #Level 2: Zip File Extraction
-        files2 = os.listdir(level1_path)
-        zfiles2 = [file for file in files2 if '.zip' in file]
-        print("Level 2 Zip Files : ", zfiles2)
-        for j in zfiles2:
-            file_name2 = os.path.join(level1_path, j)
-            #print(file_name2)
-            print("Level 2: Extracting zip file -", file_name2)
-            with ZipFile(file_name2, 'r') as zip2:
-                #zip2.printdir()
-                zip2.extractall(level1_path)
-
-        #Move CSV Files to Destination Path
-        csv_files = os.path.join(level1_path, "*.csv")
-        print("Moving CSV files to path : ", acumen_incoming_path)
-        files = glob.glob(csv_files)
-        for filename in files:
-            nas_file = os.path.join(acumen_incoming_path, filename.split('/')[-1:][0])
-            print("CSV file in NAS Drive :", nas_file)
-            with smbclient.open_file(nas_file, mode="w") as fd:
-                fd.write(open(filename).read())
-                fd.close()
-
-    # Remove the temp directory which is created for unzip process
-    print("Deleting temp director :", temp)
-    shutil.rmtree(temp)
-
-# Define function to Archive files after processing
-def archive_zip_files(acumen_input_path, acumen_incoming_path,acumen_archive_path):    
-    smbclient.register_session(host, username=user, password=passwd)
-    files = smbclient.listdir(acumen_incoming_path)
-    for file in files:
-        smbclient.remove(acumen_incoming_path+file)
-    zipfiles = smbclient.listdir(acumen_input_path)
-    for file in zipfiles:
-        FileNameLength=file.find('.')
-        FileDatetime = today.strftime("%m%d%Y%H%M%S")
-        src_file_loc = os.path.join(acumen_input_path, file)
-        arc_file_loc = os.path.join(acumen_archive_path, file[:FileNameLength] +"_"+ FileDatetime +".zip")
-        smbclient.rename(src_file_loc,arc_file_loc)
-        
-def archive_zip_files_Pythonserver(acumen_input_path):
-    smbclient.ClientConfig(username=user, password=passwd)
-    file_list = smbclient.listdir(acumen_input_path)
-    print(file_list)
-
-    # Retrieve all matched files from Comp Oper and copy to python server
-    for x in file_list:
-        print('Copy started for file: ' + x)
-
-        file_contents = None
-        with smbclient.open_file(acumen_input_path + x, mode='rb') as fd:
-            file_contents = fd.read()
-
-        # Copy file from Comp Oper to python
-        print("python path:")
-        print(os.path.join(python_server, python_server_file_path, os.path.basename(x)))
-        print(f"{python_server}/{python_server_file_path}/{x}")
-
-        # Create a file and write to it
-        with smbclient.open_file(
-            f"{python_server}/{python_server_file_path}/{x}", mode="wb",
-            username=python_server_uid, password=python_server_pwd
-        ) as fd:
-            fd.write(file_contents)
-
-
-def Datavalidation(acumen_incoming_path):    
-    smbclient.register_session(host, username=user, password=passwd)
-    file_list = smbclient.listdir(acumen_incoming_path)
-    File_Count = len(file_list)
-    File_Msg = f"Total csv files processed - {File_Count}"
-    with smbclient.open_file(
-            f"{python_server}/{python_server_file_path}/FileCount_Validation.txt", mode="w",
-            username=python_server_uid, password=python_server_pwd
-        ) as fd:
-            fd.write(File_Msg)
-    
-    td_conn = BaseHook.get_connection('oss-teradata')
-    td_username = td_conn.login
-    td_password = td_conn.password
-    td_extra = td_conn.extra_dejson
-    td_logmech = td_extra["logmech"]
-    engine_str = f'teradatasql://{td_username}:{td_password}@{TD_Server}/?logmech={td_logmech}&encryptdata=true'
-    print(engine_str)
-    td_engine = create_engine(engine_str)
-    print(td_engine)
-    conn = td_engine.connect()
-    sqlqry = f"""SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION 
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_APD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ARV_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_IOP_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_OPIOID_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_PST_INS_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE 
-            UNION
-            SEL DISTINCT FILENAME FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE;"""
-
-    df = pd.read_sql(sqlqry, con=conn)
-    File_Count_tbl = str(len(df))
-    Tbl_Msg = f"\nTotal csv files loaded in pharmacy core - {File_Count_tbl}"
-    with smbclient.open_file(
-            f"{python_server}/{python_server_file_path}/FileCount_Validation.txt", mode="a",
-            username=python_server_uid, password=python_server_pwd
-        ) as fd:
-            fd.write(Tbl_Msg)
-
-    File_row_count_df = pd.DataFrame(columns=['FileName', 'Count'])
-    file_name = []
-    Count_Result = []
-    for file in file_list:
-        smb_path = smbclient.open_file(acumen_incoming_path+file, 'r')
-        print(smb_path)
-        df_data = pd.read_csv(smb_path)
-        file_name.append(file)
-        Count_Result.append(len(df_data))
-        print(f"{file}: {len(df_data)}")
-    File_row_count_df["FileName"] = file_name
-    File_row_count_df["Count"] = Count_Result
-    
-    print(File_row_count_df.to_string())
-
-    sqlquery1 = f"""SEL  Filename,COUNT(*) as Cnt FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION 
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_ADH_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_APD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_ARV_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_IOP_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_OPIOID_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_PST_INS_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_DENOMINATOR_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_SUPD_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_COB_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME
-                UNION
-                SEL  Filename,COUNT(*) FROM PHARMACY_CORE{td_env}_V.ACUMEN_EXCLUSION_POLY_MEMBER_DETAIL WHERE CAST(LOAD_DTTS AS DATE) = CURRENT_DATE GROUP BY FILENAME;"""
-
-    Tbl_row_count_df = pd.read_sql(sqlquery1,con=conn,columns=[])
-    print(Tbl_row_count_df.to_string())
-    Join_df = File_row_count_df.merge(Tbl_row_count_df, on='FileName', how='left')
-    print(Join_df)
-    Join_df['Result'] = np.where((Join_df['Count']== Join_df['Cnt']),'PASS','FAIL')
-    with smbclient.open_file(
-            f"{python_server}/{python_server_file_path}/Datacount_Validation.txt", mode="w",
-            username=python_server_uid, password=python_server_pwd
-    ) as fd:
-        Join_df[['FileName','Result']].to_csv(fd, index = False)
-
-    print(Join_df[["FileName", "Result"]])
-
-    return Join_df[['FileName', 'Result']].to_json()
-
-
-def send_email_with_dataframes(
-    dfs: Union[pd.DataFrame, List[pd.DataFrame]],
-    csv_file_names: Union[str, List[str]],
-    subject: str = '',
-    body: str = ''
-) -> None:
-    """
-    Email recipients with the dataframes attached as csv files.
-
-    :param dfs: The dataframes to be emailed as csv attachments.
-    :param csv_file_names: The file names to assign to each csv attachment.
-    :param subject: The subject line of the email.
-    :param body: The body of the email.
-    """
-
-    # Construct email
-    email_msg = MIMEMultipart()
-    email_msg["Subject"] = subject
-
-    if isinstance(dfs, pd.DataFrame):
-        dfs = [dfs]
-
-    if isinstance(csv_file_names, str):
-        csv_file_names = [csv_file_names]
-
-    if(len(dfs) != len(csv_file_names)):
-        print("Aborting email send. Number of dataframes does not match the number of provided file names.")
-        return
-
-    for df, fname in zip(dfs, csv_file_names):
-
-        # Store dataframe as a csv in memory
-        buffer = StringIO()
-        df.to_csv(buffer, index=False)
-
-        csv_file_attachment = MIMEApplication(buffer.getvalue())
-        csv_file_attachment["Content-Disposition"] = f'attachment; filename={fname}.csv'
-        email_msg.attach(csv_file_attachment)
-
-        buffer.close()
-
-    html_attachment = MIMEText(body, 'html')
-    email_msg.attach(html_attachment)
-
-    send_mime_email(e_from=EMAIL_SENDER, e_to=EMAIL_RECIPIENT, mime_msg=email_msg)
-
-def success_email(**context):
-    """
-    Task to send Acumen specific validation data at the end of each monthly run.
-    """
-
-    incoming_json = context["ti"].xcom_pull(task_ids='Data_Validation')
-    df = pd.DataFrame.from_dict(json.loads(incoming_json))
-
-    email_body = \
-        f"""
-        Hi Team,
-        <br>
-        <br>
-        Monthly Acumen load for the month of {datetime.now().strftime("%B")} has been completed.
-        <br>
-        Total number of CSV files loaded in Core: {len(df)}
-        <br>
-        <br>
-        For any questions, please email USM_GOV_CEF_DATACURATORS@Cigna.com.
-        """
-
-    send_email_with_dataframes(
-        dfs=df,
-        csv_file_names="Data_Count_Validation",
-        subject=f'({load_env}) Acumen Data Validation Results {curr_date}',
-        body=email_body
-    )
-
-with DAG(
-    dag_id=dag_id, 
-	default_args=default_args,
-    schedule_interval=schedule_cron, 
-	catchup=False,
-	max_active_runs=1
-	)as dag:
-
-    starting_workflow = BashOperator(
-        task_id="starting_workflow",
-        bash_command="echo Starting Workflow!",
-        dag=dag
-    )
-
-    checking_for_file = SMBSensor(
-        task_id="checking_for_file",
-        fs_conn_id=wdc_comp_oper_nas_var,
-        filepath=comp_oper_file_path,
-        mode='reschedule',
-        poke_interval=43200,
-        timeout=172800,
-        dag=dag
-    )
-	
-	
-    unzip_folder_nas = PythonOperator(
-        task_id='Unzip_folder_NAS',
-        dag=dag,
-        python_callable=extract_zip_files,
-        op_kwargs={"acumen_input_path": acumen_input_path,
-		           "acumen_incoming_path": acumen_incoming_path           
-		}
-)
-
-    trigger_adh_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_ADH_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_ADH_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_cob_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_COB_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_COB_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_apd_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_APD_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_APD_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_arv_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_ARV_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_ARV_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-
-    trigger_opioid_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_OPIOID_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_OPIOID_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_poly_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_POLY_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_POLY_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_supd_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_SUPD_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_SUPD_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )	
-
-    trigger_pst_ins_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_PST_INS_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_PST_INS_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_iop_denominator_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_IOP_Denominator_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_IOP_DENOMINATOR_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	
-    trigger_adh_exclusion_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_ADH_Exclusion_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_ADH_EXCLUSION_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-	 
-    trigger_supd_exclusion_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_SUPD_Exclusion_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_SUPD_EXCLUSION_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-
-    trigger_cob_exclusion_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_COB_Exclusion_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_COB_EXCLUSION_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-
-    trigger_poly_exclusion_nas_to_td_load = TriggerDagRunOperator(
-        task_id='Trigger_POLY_Exclusion_NAS_to_TD_load',
-        trigger_dag_id='OSSTD_ACUMEN_POLY_EXCLUSION_NAS_TO_TD',
-        wait_for_completion=True,
-        trigger_rule='all_success'
-    )
-
-    data_validation = PythonOperator(
-        task_id='Data_Validation',
-        dag=dag,
-        python_callable=Datavalidation,
-        op_kwargs={
-                   "acumen_incoming_path": acumen_incoming_path
-                   }
-    )
-
-    archive_Files_COMP_OPER = PythonOperator(
-        task_id='Archive_Files_COMP_OPER',
-        dag=dag,
-        python_callable=archive_zip_files,
-        op_kwargs={"acumen_input_path": acumen_input_path,
-                   "acumen_incoming_path": acumen_incoming_path,
-                   "acumen_archive_path": acumen_archive_path
-                   }
-    )
-    
-    archive_Files_pythonserver = PythonOperator(
-        task_id='Archive_Files_Pythonserver',
-        dag=dag,
-        python_callable=archive_zip_files_Pythonserver,
-        op_kwargs={"acumen_input_path": acumen_input_path
-                   }
-    )
-
-    send_success_email = PythonOperator(
-        task_id='Notify_Success_With_Attached_Validation',
-        dag=dag,
-        python_callable=success_email,
-    )
-
-starting_workflow >> checking_for_file >> unzip_folder_nas >> [trigger_adh_denominator_nas_to_td_load, trigger_cob_denominator_nas_to_td_load, trigger_apd_denominator_nas_to_td_load, trigger_arv_denominator_nas_to_td_load, trigger_opioid_denominator_nas_to_td_load, trigger_poly_denominator_nas_to_td_load, trigger_supd_denominator_nas_to_td_load, trigger_pst_ins_denominator_nas_to_td_load, trigger_iop_denominator_nas_to_td_load, trigger_adh_exclusion_nas_to_td_load, trigger_supd_exclusion_nas_to_td_load, trigger_cob_exclusion_nas_to_td_load, trigger_poly_exclusion_nas_to_td_load]>> data_validation >> archive_Files_pythonserver >> archive_Files_COMP_OPER >> send_success_email
+Contract,PBP,Segment,State,ServiceAreaCountyName,ServiceAreaCountyCode
+H0439,3,1,GA,Butts ,11160
+H0439,3,1,GA,Greene,11520
+H0439,3,1,GA,Morgan,11771
+H0439,3,1,GA,Oconee,11800
+H0439,3,2,GA,Banks,11040
+H0439,3,2,GA,Chattooga,11240
+H0439,3,2,GA,Dawson,11350
+H0439,3,2,GA,Fayette,11451
+H0439,3,2,GA,White,11963
+H0439,6,0,GA,Cobb,11290
+H0439,6,0,GA,DeKalb,11370
+H0672,5,0,NM,San Juan,32220
+H2108,29,0,DE,Kent,8000
+H2108,42,1,DE,Kent,8000
+H4513,9,0,TX,Newton,45821
+H4513,33,0,TN,Lake,44470
+H4513,33,0,TN,Obion,44650
+H4513,36,0,TN,Bedford,44010
+H4513,36,0,TN,Grundy,44300
+H4513,36,0,TN,Haywood,44370
+H4513,39,0,AR,Crawford,4160
+H4513,46,1,AL,Lowndes,1420
+H4513,46,2,AL,Cherokee,1090
+H4513,46,2,AL,Colbert,1160
+H4513,46,2,AL,Lawrence,1390
+H4513,49,5,TN,Lake,44470
+H4513,49,5,TN,Obion,44650
+H4513,52,0,AR,Crawford,4160
+H4513,60,1,TX,Newton,45821
+H4513,61,1,TX,Newton,45821
+H4513,78,0,AR,Crawford,4160
+H4513,81,0,AR,Crawford,4160
+H4513,83,1,TX,Newton,45821
+H4513,85,0,IL,DeKalb,14170
+H4513,86,0,IL,DeKalb,14170
+H4513,88,0,AL,Tuscaloosa,1620
+H4513,91,0,TX,Newton,45821
+H7849,24,0,MO,Caldwell,26120
+H7849,102,3,AR,Crawford,4160
+H7849,124,1,DE,Kent,8000
+H7849,124,1,DE,New Castle,8010
+H7849,124,1,DE,Sussex,8020
+H9460,1,0,MO,Caldwell,26120
+
+
+YearNum,RecordType,Contract,PBP,Segment,State,LetterMaterialID,PLANReplacementID
+2025,MAPD,H0672,001,000,Colorado,H0672_25_1693729019_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,003,000,Colorado,H0672_25_1693731213_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,004,000,Colorado,H0672_25_1693732296_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,008,000,Colorado,H0672_25_1693735889_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,019,000,Colorado,H0672_25_1693738679_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,020,000,Colorado,H0672_25_1693740130_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,021,000,Colorado,H0672_25_1693741679_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,022,000,Colorado,H0672_25_1693743193_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,DSNP,H2108,039,000,Delaware,H2108_25_1693746062_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,DSNP,H2108,043,001,Delaware,H2108_25_1693748216_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,DSNP,H2108,043,002,Maryland,H2108_25_1693749954_C,2026_NR_SAR_OrgReplacement_H2108_Maryland
+2025,MA-Only  ,H3949,026,000,Pennsylvania,H3949_25_1693752214_C,2026_NR_SAR_OrgReplacement_H3949_Pennsylvania
+2025,MAPD,H3949,032,000,New Jersey,H3949_25_1693763324_C,2026_NR_SAR_OrgReplacement_H3949_New Jersey
+2025,MA-Only  ,H3949,051,000,New Jersey,H3949_25_1693767134_C,2026_NR_SAR_OrgReplacement_H3949_New Jersey
+2025,MAPD,H4407,028,000,Mississippi,H4407_25_1693777152_C,2026_NR_SAR_OrgReplacement_H4407
+2025,MAPD,H4513,059,000,Tennessee,H4513_25_1693779846_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,MAPD,H5410,027,000,Florida,H5410_25_1693782278_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,028,000,Florida,H5410_25_1693813772_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,029,000,Florida,H5410_25_1693815160_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,030,000,Florida,H5410_25_1693817368_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,037,000,Florida,H5410_25_1693818666_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,039,000,Florida,H5410_25_1693819890_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,040,000,Florida,H5410_25_1693821385_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,041,000,Florida,H5410_25_1693823733_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,043,000,Florida,H5410_25_1693824943_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,044,000,Florida,H5410_25_1693828852_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,048,000,Florida,H5410_25_1693830421_C,2026_NR_SAR_OrgReplacement_H5410
+2025,DSNP,H5410,049,000,Florida,H5410_25_1693832205_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,050,000,Florida,H5410_25_1693833337_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,051,000,Florida,H5410_25_1693836595_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,052,000,Florida,H5410_25_1693838228_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,053,000,Florida,H5410_25_1693840244_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,054,000,Florida,H5410_25_1693842284_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MA-Only  ,H5410,057,000,Florida,H5410_25_1693850342_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MA-Only  ,H5410,058,000,Florida,H5410_25_1693852899_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H7389,001,000,Utah,H7389_25_1693862001_C,2026_NR_SAR_OrgReplacement_H7389_Utah
+2025,MAPD,H7389,002,000,Oregon,H7389_25_1693872426_C,2026_NR_SAR_OrgReplacement_H7389_Oregon
+2025,MAPD,H7389,002,000,Washington,H7389_25_1693872426a_C,2026_NR_SAR_OrgReplacement_H7389_Washington
+2025,MAPD,H7389,003,000,Missouri,H7389_25_1693874360_C,2026_NR_SAR_OrgReplacement_H7389_Missouri
+2025,MAPD,H7389,008,000,Nevada,H7389_25_1693882247_C,2026_NR_SAR_OrgReplacement_H7389_Nevada
+2025,DSNP,H7389,009,000,Missouri,H7389_25_1693884356_C,2026_NR_SAR_OrgReplacement_H7389_Missouri
+2025,DSNP,H7389,010,000,Missouri,H7389_25_1693886559_C,2026_NR_SAR_OrgReplacement_H7389_Missouri
+2025,MAPD,H7389,011,000,Washington  ,H7389_25_1693888505_C,2026_NR_SAR_OrgReplacement_H7389_Washington
+2025,MA-Only  ,H7787,002,000,Texas,H7787_25_1693891825_C,2026_NR_SAR_OrgReplacement_H7787
+2025,MAPD,H7849,001,000,Colorado,H7849_25_1693893809_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,006,000,Pennsylvania,H7849_25_1693895539_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,020,000,Georgia,H7849_25_1693897563_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,026,000,Colorado,H7849_25_1693899985_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,027,000,Colorado,H7849_25_1693901374_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,031,000,Pennsylvania,H7849_25_1693903563_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,033,000,New Jersey,H7849_25_1694067459_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,034,000,Tennessee,H7849_25_1694068374_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,034,000,Virginia,H7849_25_1694068374a_C,2026_NR_SAR_OrgReplacement_H7849_Virginia
+2025,MAPD,H7849,038,000,Texas,H7849_25_1694068901_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,039,000,Texas,H7849_25_1694069258_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,041,000,Texas,H7849_25_1694069542_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,042,000,Oklahoma ,H7849_25_1693889537_C,2026_NR_SAR_OrgReplacement_H7849_Oklahoma
+2025,MAPD,H7849,051,000,Colorado,H7849_25_1693900162_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,052,000,Connecticut,H7849_25_1693911459_C,2026_NR_SAR_OrgReplacement_H7849_Connecticut
+2025,MAPD,H7849,055,000,Oregon,H7849_25_1693915572_C,2026_NR_SAR_OrgReplacement_H7849_Oregon
+2025,MAPD,H7849,055,000,Washington,H7849_25_1693915572a_C,2026_NR_SAR_OrgReplacement_H7849_Washington 
+2025,MAPD,H7849,064,001,Alabama,H7849_25_1693934618_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,064,002,Alabama,H7849_25_1693943723_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,064,004,Mississippi,H7849_25_1693946430_C,2026_NR_SAR_OrgReplacement_H7849_Mississippi
+2025,MAPD,H7849,067,000,Georgia,H7849_25_1693952462_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,068,000,Alabama,H7849_25_1693965940_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,068,000,Georgia,H7849_25_1693965940a_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MA-Only  ,H7849,072,000,Kansas ,H7849_25_1693976311_C,2026_NR_SAR_OrgReplacement_H7849_Kansas
+,MA-Only  ,H7849,072,000,Missouri,H7849_25_1693976311_C,2026_NR_SAR_OrgReplacement_H7849_Missouri
+2025,MA-Only  ,H7849,073,000,Illinois,H7849_25_1693982497_C,2026_NR_SAR_OrgReplacement_H7849_Illinois
+2025,MA-Only  ,H7849,074,000,Illinois,H7849_25_1693982497_C,2026_NR_SAR_OrgReplacement_H7849_Illinois
+2025,MA-Only  ,H7849,074,000,Missouri,H7849_25_1693982497a_C,2026_NR_SAR_OrgReplacement_H7849_Missouri
+2025,MA-Only  ,H7849,078,000,Illinois,H7849_25_1693982831_C,2026_NR_SAR_OrgReplacement_H7849_Illinois
+2025,MAPD,H7849,082,000,New York,H7849_25_1693983259_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,083,000,New York,H7849_25_1693984882_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,084,000,New York,H7849_25_1693985347_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,085,000,New York,H7849_25_1693985984_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MA-Only  ,H7849,086,000,New York,H7849_25_1693986463_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,087,000,New York,H7849_25_1693987358_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MA-Only  ,H7849,089,000,Kentucky,H7849_25_1693990060_C,2026_NR_SAR_OrgReplacement_H7849_Kentucky
+2025,MA-Only  ,H7849,089,000,Ohio,H7849_25_1693990060a_C,2026_NR_SAR_OrgReplacement_H7849_Ohio
+2025,MAPD,H7849,103,000,Texas,H7849_25_1693991021_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,104,000,Pennsylvania,H7849_25_1693992424_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,105,000,Pennsylvania,H7849_25_1693994223_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,107,000,Pennsylvania,H7849_25_1693994999_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,108,000,Pennsylvania,H7849_25_1693995494_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,109,000,Pennsylvania,H7849_25_1693995923_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,110,000,New York,H7849_25_1693996815_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,110,000,New Jersey,H7849_25_1693996815a_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,112,001,Alabama,H7849_25_1694060148_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,112,002,Alabama,H7849_25_1694060460_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,112,003,Alabama,H7849_25_1694060617_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,112,004,Alabama,H7849_25_1694060808_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,117,001,Georgia,H7849_25_1694061058_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,117,002,Georgia,H7849_25_1694061399_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+,MAPD,H7849,117,002,Alabama,H7849_25_1694061399a_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,118,000,Georgia,H7849_25_1694062126_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,119,000,Georgia,H7849_25_1694062267_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,120,000,Georgia,H7849_25_1694062838_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,121,000,Georgia,H7849_25_1694063323_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MA-Only  ,H7849,122,000,Alabama,H7849_25_1694064022_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MA-Only  ,H7849,122,000,Georgia,H7849_25_1694064022a_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,123,000,Delaware,H7849_25_1694064214_C,2026_NR_SAR_OrgReplacement_H7849_Delaware
+2025,MAPD,H7849,124,001,Delaware,H7849_25_1694064689_C,2026_NR_SAR_OrgReplacement_H7849_Delaware
+2025,MAPD,H7849,125,000,Delaware,H7849_25_1694066302_C,2026_NR_SAR_OrgReplacement_H7849_Delaware
+2025,MA-Only  ,H7849,126,000,Colorado,H7849_25_1694066969_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,127,000,New York,H7849_25_1694067212_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,128,000,New York,H7849_25_1693790778_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,129,000,New Jersey,H7849_25_1693796507_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,130,000,New Jersey,H7849_25_1693807886_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,131,000,New Jersey,H7849_25_1693811582_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,133,001,Tennessee,H7849_25_1693813159_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,133,002,Georgia,H7849_25_1693814621_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,133,002,Tennessee,H7849_25_1693814621a_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,133,003,Tennessee,H7849_25_1693815270_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,133,004,Tennessee,H7849_25_1693816390_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,134,001,Texas,H7849_25_1693824789_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,134,002,Texas,H7849_25_1693827269_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,137,001,Georgia  ,H7849_25_1693828044_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,137,002,Georgia  ,H7849_25_1693837476_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,137,003,Georgia  ,H7849_25_1693838761_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,137,004,Georgia  ,H7849_25_1693839780_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MA-Only  ,H7849,138,000,Utah,H7849_25_1693842858_C,2026_NR_SAR_OrgReplacement_H7849_Utah
+2025,MA-Only  ,H7849,139,000,Oregon,H7849_25_1693844303_C,2026_NR_SAR_OrgReplacement_H7849_Oregon
+2025,MA-Only  ,H7849,139,000,Washington,H7849_25_1693844303a_C,2026_NR_SAR_OrgReplacement_H7849_Washington
+2025,MAPD,H7849,140,001,Mississippi,H7849_25_1693845947_C,2026_NR_SAR_OrgReplacement_H7849_Mississippi
+2025,MAPD,H7849,140,001,Tennessee,H7849_25_1693845947a_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,140,002,Tennessee,H7849_25_1693847439_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MA-Only  ,H7849,141,000,Oklahoma ,H7849_25_1693851989_C,2026_NR_SAR_OrgReplacement_H7849_Oklahoma
+2025,MAPD,H9725,008,000,Virginia,H9725_25_1693864598_C,2026_NR_SAR_OrgReplacement_H9725
+2025,MAPD,H0439,003,001,Georgia,H0439_25_1693865841_C,2026_NR_SAR_OrgReplacement_H0439
+2025,MAPD,H0439,003,002,Georgia,H0439_25_1693868697_C,2026_NR_SAR_OrgReplacement_H0439
+2025,MAPD,H0439,006,000,Georgia,H0439_25_1693870065_C,2026_NR_SAR_OrgReplacement_H0439
+2025,MAPD,H0672,005,000,New Mexico,H0672_25_1695285675_C,2026_NR_SAR_OrgReplacement_H0672_New Mexico
+2025,MAPD,H2108,029,000,Delaware,H2108_25_1695286598_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,MAPD,H2108,042,001,Delaware,H2108_25_1695286954_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,MA-Only  ,H4513,009,000,Texas,H4513_25_1695287765_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MA-Only  ,H4513,033,000,Tennessee,H4513_25_1695288922_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,MAPD,H4513,036,000,Tennessee,H4513_25_1695289993_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,DSNP,H4513,039,000,Arkansas,H4513_25_1695291705_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,MAPD,H4513,046,001,Alabama,H4513_25_1695292508_C,2026_NR_SAR_OrgReplacement_H4513_Alabama
+2025,MAPD,H4513,046,002,Alabama,H4513_25_1695296631_C,2026_NR_SAR_OrgReplacement_H4513_Alabama
+2025,MAPD,H4513,049,005,Tennessee,H4513_25_1695297079_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,MAPD,H4513,052,000,Arkansas,H4513_25_1695299124_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,DSNP,H4513,060,001,Texas,H4513_25_1695301221_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MAPD,H4513,061,001,Texas,H4513_25_1695302034_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MA-Only  ,H4513,078,000,Arkansas,H4513_25_1695322388_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,DSNP,H4513,081,000,Arkansas,H4513_25_1695323222_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,MAPD,H4513,083,001,Texas,H4513_25_1695324897_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MAPD,H4513,085,000,Illinois,H4513_25_1695327762_C,2026_NR_SAR_OrgReplacement_H4513_Illinois
+2025,MAPD,H4513,086,000,Illinois,H4513_25_1695420954_C,2026_NR_SAR_OrgReplacement_H4513_Illinois
+2025,MAPD,H4513,088,000,Alabama,H4513_25_1695427293_C,2026_NR_SAR_OrgReplacement_H4513_Alabama
+2025,MAPD,H4513,091,000,Texas,H4513_25_1695428402_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MAPD,H7849,024,000,Missouri,H7849_25_1695429694_C,2026_NR_SAR_OrgReplacement_H7849_Missouri
+2025,MAPD,H7849,102,003,Arkansas,H7849_25_1695430602_C,2026_NR_SAR_OrgReplacement_H7849_Arkansas
+2025,MAPD,H9460,001,000,Missouri,H9460_25_1695431463_C,2026_NR_SAR_OrgReplacement_H9460
