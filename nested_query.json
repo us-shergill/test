@@ -1,266 +1,286 @@
-# --- Teradata JDBC connection (edit) ---
-td_url = "jdbc:teradata://<TD_HOST>/DBS_PORT=1025,TMODE=TERA,CHARSET=UTF8"
-td_props = {"driver": "com.teradata.jdbc.TeraDriver", "user": "<TD_USER>", "password": "<TD_PASSWORD>"}
-
 td_sql_base = """
-SELECT
-  -- original select columns up to SCC_STATES/STREF join outputs
-  MBR.MEMCODNUM                                    --N/A
- ,MBR.MemberID                 AS "Member ID"
- ,MBR.CurrentEffDate           AS LatestEffectiveDate   --N/A
- ,MBR.TermDate                 AS TermDate             --N/A
- ,MBRS.Description             AS CurrentStatus        --N/A
- ,DMG.OECCounty                                        --N/A
- ,DMG.SCC1                     AS DMGSCC1             --N/A
- ,DMG.SCC2                     AS DMGSCC2             --N/A
- ,DMG.FirstName                AS FirstName
- ,DMG.LastName                 AS LastName
- ,PhyADDR.Address1             AS PhyAddr1            --N/A
- ,PhyADDR.Address2             AS PhyAddr2            --N/A
- ,PhyADDR.City                 AS PhyCity             --N/A
- ,PhyADDR.State                AS PhyState            --N/A
- ,CASE WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour END AS PhyZip  --N/A
- ,MailADDR.Address1            AS MailAddr1
- ,MailADDR.Address2            AS MailAddr2
- ,MailADDR.City                AS MailCity
- ,MailADDR.State               AS MailState
- ,CASE WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip ELSE MailADDR.Zip||'-'||MailADDR.ZipFour END AS MailZip
- ,MBR.PlanID                   AS CContract
- ,MBR.PBP                      AS CPBP
- ,COALESCE(EAMSGMNT.SegmentID, MBR.SegmentID, '000') AS CSegment
- ,EAMSGMNT.Span_EffDate
- ,EAMSGMNT.Span_TermDate
- ,PLN.ProductName              AS "Plan Name"
- ,COALESCE(SPAN.SPANSCC, DMG.SCC1) AS SCCCode
- ,SPAN.SPANSCC                 --N/A
- ,DMG.SCC1                     --N/A
- ,COALESCE(DMG."Language",'ENG') AS LanguageText
- ,CASE
-     WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
-     WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
-     WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
-     WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
-     ELSE ''
-  END                          AS "Alternate Format"
- ,SC.CountyName                AS County
- ,SC.State                     AS CountyState         --N/A
- ,STREF.STATE_NAME             AS CountyStateName     -- used later for MBOM.State match and "Plan State" when in-county
-FROM (
-  SELECT
-    MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
-  FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
-  WHERE SRC_DATA_KEY = '210'
-    AND CAST(SUBSTR(TermDate,1,10) AS DATE FORMAT 'YYYY-MM-DD') > CURRENT_DATE
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1
-) MBR
-JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
-  ON  MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY
-  AND MBR.MemCodNum    = DMG.MemCodNum
-JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
-  ON  MBR.MemberStatus = MBRS.Status
-JOIN (
-  SELECT
-    tbe.PlanID,
-    tbe.MemCodNum,
-    tbe."Value" AS SpanValue,
-    CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
-    CAST(tbe.ENDDATE  AS DATE) AS Span_TermDate,
-    COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),
-             NULLIF(TRIM(tbe.SEGD_SegmentID), ''),
-             NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID
-  FROM (
-    SELECT d."Value" AS SEGD_SegmentID, d.StartDate AS SEGD_startDate, d.EndDate AS SEGD_EndDate, c.*
-    FROM (
-      SELECT b."Value" AS SEGC_SegmentID, b.StartDate AS SEGC_startDate, b.EndDate AS SEGC_EndDate, a.*
-      FROM GBS_FACET_CORE_V.EAM_tbENRLSpans a
-      LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
-        ON a.MemCodNum = b.MemCodNum
-       AND a.PlanID    = b.PlanID
-       AND (b.StartDate BETWEEN a.StartDate AND a.EndDate)
-       AND a.SPANTYPE  = 'PBP' AND b.SPANTYPE='SEGC'
-    ) c
-    LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
-      ON c.MemCodNum = d.MemCodNum
-     AND c.PlanID    = d.PlanID
-     AND ((SEGC_startDate IS NOT NULL AND c.SEGC_startDate = d.StartDate) OR
-          (SEGC_startDate IS NULL     AND c.StartDate      = d.StartDate))
-     AND c.SPANTYPE  = 'PBP' AND d.SPANTYPE='SEGD'
-  ) tbe
-  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
-    ON tbt.MemCodNum = tbe.MemCodNum
-   AND tbt.PlanID    = tbe.PlanID
-   AND tbt.PBPID     = tbe."Value"
-   AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
-   AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
-   AND tbt.TransStatus IN (5)
-  WHERE tbe.SpanType = 'PBP'
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value"
-                             ORDER BY Span_EffDate DESC, Span_TermDate DESC) = 1
-) EAMSGMNT
-  ON  MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
-  AND MBR.PlanID    = EAMSGMNT.PlanID
-  AND MBR.PBP       = EAMSGMNT.SpanValue
-JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
-  ON  MBR.PlanID = PLN.PlanID
-  AND MBR.PBP    = PLN.PBPID
-LEFT JOIN (
-  SELECT MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
-  FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
-  WHERE AddressUse = '1'
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1
-) PhyADDR
-  ON  MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY
-  AND MBR.MemCodNum    = PhyADDR.MemCodNum
-LEFT JOIN (
-  SELECT MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
-  FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
-  WHERE AddressUse = '2'
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1
-) MailADDR
-  ON  MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY
-  AND MBR.MemCodNum    = MailADDR.MemCodNum
-LEFT JOIN (
-  SELECT memcodnum, "value" AS SPANSCC
-  FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
-  WHERE spantype = 'SCC'
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY memcodnum ORDER BY startdate DESC) = 1
-) SPAN
-  ON DMG.memcodnum = SPAN.memcodnum
+            SELECT
+            MBR.MEMCODNUM --N/A
+            ,MBR.MemberID as "Member ID"
+            ,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+            ,MBR.TermDate as TermDate --N/A
+            ,MBRS.Description as CurrentStatus --N/A 
+            ,DMG.OECCounty --N/A
+            ,DMG.SCC1 as DMGSCC1 --N/A
+            ,DMG.SCC2 as DMGSCC2 --N/A
+            ,DMG.FirstName as FirstName
+            ,DMG.LastName as LastName
+            ,PhyADDR.Address1 as PhyAddr1 --N/A
+            ,PhyADDR.Address2 as PhyAddr2 --N/A
+            ,PhyADDR.City as PhyCity --N/A
+            ,PhyADDR.State as PhyState --N/A
+            ,CASE 
+            WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+            ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+            END as PhyZip --N/A
+            ,MailADDR.Address1 as MailAddr1
+            ,MailADDR.Address2 as MailAddr2
+            ,MailADDR.City as MailCity
+            ,MailADDR.State as MailState
+            ,CASE 
+            WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+            ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+            END as MailZip
+            ,MBR.PlanID as CContract
+            ,MBR.PBP as CPBP
+            ,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+            ,EAMSGMNT.Span_EffDate
+            ,EAMSGMNT.Span_TermDate
+            ,PLN.ProductName as "Plan Name"
+            ,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+            ,SPAN.SPANSCC --N/A 
+            ,DMG.SCC1 --N/A 
+            ,COALESCE(DMG."Language",'ENG') as LanguageText
+            ,CASE 
+                WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+                WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+                WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+                WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+                ELSE '' 
+                END AS "Alternate Format"
+            ,SC.CountyName as County
+            ,SC.State                     AS CountyState         --N/A
+            ,STREF.STATE_NAME             AS CountyStateName     -- used later 
 
--- >>> Teradata refs that originally appeared AFTER SAR; we push them down now and carry their outputs forward.
-LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
-  ON COALESCE(SPAN.SPANSCC, DMG.SCC1) = SC.SCC_CODE
-LEFT JOIN (
-  SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
-  FROM REFDATA_CORE_V.STATE_COUNTY
-) STREF
-  ON SC.State = STREF.STATE_ABBREVIATED_NAME
-"""
+            FROM (
+                SELECT
+                MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+                FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+                WHERE SRC_DATA_KEY = '210'
+                and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
 
-td_df = spark.read.jdbc(td_url, f"({td_sql_base}) t", properties=td_props)
-td_df.createOrReplaceTempView("TD_BASE_PUSHDOWN")
+                JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+                ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+                AND MBR.MemCodNum = DMG.MemCodNum
+                --AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
 
+                JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+                ON MBR.MemberStatus = MBRS.Status
+                --AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+                
+                LEFT JOIN 
+                (
+                    Select 
+                            tbe.PlanID,
+                            tbe.MemCodNum,
+                            tbe.HIC AS SpanMBINumber,
+                            tbe.SPANTYPE AS SpanType,
+                            tbe."Value" AS SpanValue,
+                            CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+                            CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+                            CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+                            CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+                            Tbt.DateCreated AS TR_CREATE_DATE,
+                            --SegmentId population preference: SEGC, SEGD, Transactions, Default000
+                            COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+                            SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                            FROM (
+                            --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                            select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                            (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                                    a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                                    ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+                        LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                            ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                                ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                                    ON tbt.MemCodNum = tbe.MemCodNum
+                                                    AND tbt.PlanID = tbe.PlanID
+                                                    AND tbt.PBPID = tbe."Value"
+                                                    AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                                    AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                                    AND tbt.TransStatus IN (5)
+                                                    WHERE tbe.SpanType = 'PBP'
+                                                    QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                                    ) EAMSGMNT
+                                                    
+                ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+                AND MBR.PlanID = EAMSGMNT.PlanID
+                AND MBR.PBP = EAMSGMNT.SpanValue
+
+                JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+                ON MBR.PlanID = PLN.PlanID
+                AND MBR.PBP = PLN.PBPID
+
+                LEFT JOIN (
+                SELECT 
+                MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+                FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+                WHERE AddressUse = '1'
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+                ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+                AND MBR.MemCodNum = PhyADDR.MemCodNum
+
+                LEFT JOIN (
+                SELECT 
+                MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+                FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+                WHERE AddressUse = '2'
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+                ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+                AND MBR.MemCodNum = MailADDR.MemCodNum
+                
+                LEFT JOIN (
+                select 
+                memcodnum, "value" as SPANSCC  
+                FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+                WHERE spantype = 'SCC'
+                qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+                ON dmg.memcodnum = span.memcodnum
+                
+                LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+                ON SCCCode = SC.SCC_CODE
+                
+                LEFT JOIN 
+                (
+                    SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+                ON SC.State = STREF.STATE_ABBREVIATED_NAME;
+        """
+    # Read data from Teradata
+print("Reading data from Teradata...")
+spark = SparkSession.builder.appName("SAR_NR_Processing").getOrCreate()
+# Setup Teradata connection
+print("Setting up Teradata connection...")
+config = setup_teradata_connection()
+td_df = read_teradata_table(spark, config, td_sql_base)
+print("Done Reading base data from Teradata...")
 # Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
-ref_state_df = spark.read.jdbc(
-    td_url,
-    "(SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY) r",
-    properties=td_props
-)
+ref_state_sql = "SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY"
+ref_state_df = read_teradata_table(spark, config, ref_state_sql)
 ref_state_df.createOrReplaceTempView("REF_STATE")
-
-
-
-
-
-
----------------
-
-
--- If needed:
--- USE CATALOG <your_catalog>;
--- USE SCHEMA  <your_schema>;
-
+print("Joining with SAR data...")
+td_df.createOrReplaceTempView("TD_BASE_PUSHDOWN")
+sar_bom_join_sql = """
 WITH SAR AS (
-  SELECT Contract, PBP, Segment, ServiceAreaCountyCode
-  FROM VT_SAR_PLAN
+SELECT Contract, PBP, Segment, ServiceAreaCountyCode
+FROM core_refdata.SAR_PLAN
 ),
 MBOM AS (
-  SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
-  FROM VT_SAR_NR_BOM_2026
+SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
+FROM core_refdata.SAR_NR_BOM_2026
 ),
 MBOMNOST AS (
-  SELECT *
-  FROM (
-    SELECT *,
-           ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
-    FROM VT_SAR_NR_BOM_2026
-  ) x
-  WHERE rn = 1
+SELECT *
+FROM (
+SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
+FROM core_refdata.SAR_NR_BOM_2026
+) x
+WHERE rn = 1
 ),
 MBOMSTREF AS (   -- small state abbrev map for MBOMNOST.State -> abbrev (for PhysicalState fallback)
-  SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
-  FROM REF_STATE
+SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+FROM REF_STATE
 )
 
 SELECT
-  TD.MEMCODNUM                            --N/A
- ,TD.`Member ID`          AS "Member ID"
- ,TD.LatestEffectiveDate  --N/A
- ,TD.TermDate             --N/A
- ,TD.CurrentStatus        --N/A
- ,TD.OECCounty            --N/A
- ,TD.DMGSCC1              --N/A
- ,TD.DMGSCC2              --N/A
- ,TD.FirstName            AS FirstName
- ,TD.LastName             AS LastName
- ,TD.PhyAddr1             AS PhyAddr1     --N/A
- ,TD.PhyAddr2             AS PhyAddr2     --N/A
- ,TD.PhyCity              AS PhyCity      --N/A
- ,TD.PhyState             AS PhyState     --N/A
- ,TD.PhyZip               AS PhyZip       --N/A
- ,TD.MailAddr1            AS MailAddr1
- ,TD.MailAddr2            AS MailAddr2
- ,TD.MailCity             AS MailCity
- ,TD.MailState            AS MailState
- ,TD.MailZip              AS MailZip
- ,TD.CContract            AS CContract
- ,TD.CPBP                 AS CPBP
- ,TD.CSegment             AS CSegment
- ,TD.Span_EffDate
- ,TD.Span_TermDate
- ,TD.`Plan Name`          AS "Plan Name"
- ,TD.SCCCode              AS SCCCode
- ,TD.SPANSCC              --N/A
- ,TD.SCC1                 --N/A
- ,TD.LanguageText         AS LanguageText
- ,TD."Alternate Format"   AS "Alternate Format"
- ,TD.County               AS County
- ,CASE
-     WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
-     ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
-  END AS PhysicalState
- ,TD.CountyState          AS CountyState  --N/A
- ,CASE
-     WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
-     ELSE MBOMNOST.State
-  END AS "Plan State"
- ,TD.`Member ID`||'_SAR_'||(date_format(current_date(),'yyyyMMdd')) AS "Record ID"
- ,CASE
-     WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
-     ELSE MBOMNOST.RecordType
-  END AS "Record Type"
- ,CASE
-     WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
-     ELSE MBOMNOST.LetterMaterialID
-  END AS "Material ID"
- ,CASE
-     WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
-     ELSE MBOMNOST.PLANReplacementID
-  END AS "Plan Replacement ID"
+TD.MEMCODNUM                            --N/A
+,TD.`Member ID`          AS "Member ID"
+,TD.LatestEffectiveDate  --N/A
+,TD.TermDate             --N/A
+,TD.CurrentStatus        --N/A
+,TD.OECCounty            --N/A
+,TD.DMGSCC1              --N/A
+,TD.DMGSCC2              --N/A
+,TD.FirstName            AS FirstName
+,TD.LastName             AS LastName
+,TD.PhyAddr1             AS PhyAddr1     --N/A
+,TD.PhyAddr2             AS PhyAddr2     --N/A
+,TD.PhyCity              AS PhyCity      --N/A
+,TD.PhyState             AS PhyState     --N/A
+,TD.PhyZip               AS PhyZip       --N/A
+,TD.MailAddr1            AS MailAddr1
+,TD.MailAddr2            AS MailAddr2
+,TD.MailCity             AS MailCity
+,TD.MailState            AS MailState
+,TD.MailZip              AS MailZip
+,TD.CContract            AS CContract
+,TD.CPBP                 AS CPBP
+,TD.CSegment             AS CSegment
+,TD.Span_EffDate
+,TD.Span_TermDate
+,TD.`Plan Name`          AS "Plan Name"
+,TD.SCCCode              AS SCCCode
+,TD.SPANSCC              --N/A
+,TD.SCC1                 --N/A
+,TD.LanguageText         AS LanguageText
+,TD."Alternate Format"   AS "Alternate Format"
+,TD.County               AS County
+,CASE
+WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
+ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
+END AS PhysicalState
+,TD.CountyState          AS CountyState  --N/A
+,CASE
+WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
+ELSE MBOMNOST.State
+END AS "Plan State"
+,TD.`Member ID`||'_SAR_'||(date_format(current_date(),'yyyyMMdd')) AS "Record ID"
+,CASE
+WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
+ELSE MBOMNOST.RecordType
+END AS "Record Type"
+,CASE
+WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
+ELSE MBOMNOST.LetterMaterialID
+END AS "Material ID"
+,CASE
+WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
+ELSE MBOMNOST.PLANReplacementID
+END AS "Plan Replacement ID"
 
 FROM TD_BASE_PUSHDOWN TD
 
 -- original SAR position in flow
 JOIN SAR
-  ON TD.CContract = SAR.Contract
- AND TD.CPBP     = SAR.PBP
- AND TD.CSegment = SAR.Segment
- AND TD.SCCCode  = SAR.ServiceAreaCountyCode
+ON TD.CContract = SAR.Contract
+AND TD.CPBP     = SAR.PBP
+AND TD.CSegment = SAR.Segment
+AND TD.SCCCode  = SAR.ServiceAreaCountyCode
 
 -- SC and STREF were executed in pushdown; their fields are already on TD_*
 -- We now only need the UC tables + small REF map:
 
 LEFT JOIN MBOM
-  ON TD.CContract = MBOM.Contract
- AND TD.CPBP     = MBOM.PBP
- AND TD.CSegment = MBOM.Segment
- AND TD.CountyStateName = MBOM.State         -- was STREF.STATE_NAME in original
+ON TD.CContract = MBOM.Contract
+AND TD.CPBP     = MBOM.PBP
+AND TD.CSegment = MBOM.Segment
+AND TD.CountyStateName = MBOM.State         -- was STREF.STATE_NAME in original
 
 LEFT JOIN MBOMNOST
-  ON TD.CContract = MBOMNOST.Contract
- AND TD.CPBP     = MBOMNOST.PBP
- AND TD.CSegment = MBOMNOST.Segment
+ON TD.CContract = MBOMNOST.Contract
+AND TD.CPBP     = MBOMNOST.PBP
+AND TD.CSegment = MBOMNOST.Segment
 
 LEFT JOIN MBOMSTREF
-  ON MBOMNOST.State = MBOMSTREF.STATE_NAME
-;
+ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+"""
+print("Executing...")
+result_df = spark.sql(sar_bom_join_sql)
+
+
+
+(java.sql.SQLException) [Teradata Database] [TeraJDBC 20.00.00.42] [Error 3707] [SQLState 42000] Syntax error, expected something like an 'EXCEPT' keyword or an 'UNION' keyword or a 'MINUS' keyword between the word 'STATE_ABBREVIATED_NAME' and ';'.
+
+JVM stacktrace:
+java.sql.SQLException
+	at com.teradata.jdbc.jdbc_4.util.ErrorFactory.makeDatabaseSQLException(ErrorFactory.java:301)
+	at com.teradata.jdbc.jdbc_4.statemachine.ReceiveInitSubState.action(ReceiveInitSubState.java:103)
+	at com.teradata.jdbc.jdbc_4.statemachine.StatementReceiveState.subStateMachine(StatementReceiveState.java:311)
+	at com.teradata.jdbc.jdbc_4.statemachine.StatementReceiveState.action(StatementReceiveState.java:200)
+	at com.teradata.jdbc.jdbc_4.statemachine.StatementController.runBody(StatementController.java:137)
+	at com.teradata.jdbc.jdbc_4.statemachine.StatementController.run(StatementController.java:128)
+	at com.teradata.jdbc.jdbc_4.TDStatement.executeStatement(TDStatement.java:389)
+	at com.teradata.jdbc.jdbc_4.TDStatement.prepareRequest(TDStatement.java:576)
+	at com.teradata.jdbc.jdbc_4.TDPreparedStatement.<init>(TDPreparedStatement.java:164)
+	at com.teradata.jdbc.jdbc_4.TDSession.constructPreparedStatement(TDSession.java:1530)
+	at com.teradata.jdbc.jdbc_4.TDSession.prepareStatement(TDSession.java:1281)
+	at com.teradata.jdbc.jdbc_4.TDSession.prepareStatement(TDSession.java:1325)
+	at com.teradata.jdbc.jdbc_4.TDSession.prepareStatement(TDSession.java:1311)
+	at com.teradata.jdbc.jdbc.ManagerConnectionBase.prepareStatement(ManagerConnectionBase.java:304)
+	at org.apache.spark.sql.execution.datasources.jdbc.JDBCRDD$.$anonfun$getQueryOutputSchema$1(JDBCRDD.scal
