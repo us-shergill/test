@@ -1,141 +1,266 @@
-Perfect. Let’s assume for now that **Segment is still required**, and you're going to:
+# --- Teradata JDBC connection (edit) ---
+td_url = "jdbc:teradata://<TD_HOST>/DBS_PORT=1025,TMODE=TERA,CHARSET=UTF8"
+td_props = {"driver": "com.teradata.jdbc.TeraDriver", "user": "<TD_USER>", "password": "<TD_PASSWORD>"}
 
-> Generate SAR mailing files (one per Contract + PBP + Segment), summary files, and error files — in tab-delimited CSV format — using Teradata as source.
+td_sql_base = """
+SELECT
+  -- original select columns up to SCC_STATES/STREF join outputs
+  MBR.MEMCODNUM                                    --N/A
+ ,MBR.MemberID                 AS "Member ID"
+ ,MBR.CurrentEffDate           AS LatestEffectiveDate   --N/A
+ ,MBR.TermDate                 AS TermDate             --N/A
+ ,MBRS.Description             AS CurrentStatus        --N/A
+ ,DMG.OECCounty                                        --N/A
+ ,DMG.SCC1                     AS DMGSCC1             --N/A
+ ,DMG.SCC2                     AS DMGSCC2             --N/A
+ ,DMG.FirstName                AS FirstName
+ ,DMG.LastName                 AS LastName
+ ,PhyADDR.Address1             AS PhyAddr1            --N/A
+ ,PhyADDR.Address2             AS PhyAddr2            --N/A
+ ,PhyADDR.City                 AS PhyCity             --N/A
+ ,PhyADDR.State                AS PhyState            --N/A
+ ,CASE WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour END AS PhyZip  --N/A
+ ,MailADDR.Address1            AS MailAddr1
+ ,MailADDR.Address2            AS MailAddr2
+ ,MailADDR.City                AS MailCity
+ ,MailADDR.State               AS MailState
+ ,CASE WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip ELSE MailADDR.Zip||'-'||MailADDR.ZipFour END AS MailZip
+ ,MBR.PlanID                   AS CContract
+ ,MBR.PBP                      AS CPBP
+ ,COALESCE(EAMSGMNT.SegmentID, MBR.SegmentID, '000') AS CSegment
+ ,EAMSGMNT.Span_EffDate
+ ,EAMSGMNT.Span_TermDate
+ ,PLN.ProductName              AS "Plan Name"
+ ,COALESCE(SPAN.SPANSCC, DMG.SCC1) AS SCCCode
+ ,SPAN.SPANSCC                 --N/A
+ ,DMG.SCC1                     --N/A
+ ,COALESCE(DMG."Language",'ENG') AS LanguageText
+ ,CASE
+     WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+     WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+     WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+     WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+     ELSE ''
+  END                          AS "Alternate Format"
+ ,SC.CountyName                AS County
+ ,SC.State                     AS CountyState         --N/A
+ ,STREF.STATE_NAME             AS CountyStateName     -- used later for MBOM.State match and "Plan State" when in-county
+FROM (
+  SELECT
+    MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+  FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+  WHERE SRC_DATA_KEY = '210'
+    AND CAST(SUBSTR(TermDate,1,10) AS DATE FORMAT 'YYYY-MM-DD') > CURRENT_DATE
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1
+) MBR
+JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+  ON  MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY
+  AND MBR.MemCodNum    = DMG.MemCodNum
+JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+  ON  MBR.MemberStatus = MBRS.Status
+JOIN (
+  SELECT
+    tbe.PlanID,
+    tbe.MemCodNum,
+    tbe."Value" AS SpanValue,
+    CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+    CAST(tbe.ENDDATE  AS DATE) AS Span_TermDate,
+    COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),
+             NULLIF(TRIM(tbe.SEGD_SegmentID), ''),
+             NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID
+  FROM (
+    SELECT d."Value" AS SEGD_SegmentID, d.StartDate AS SEGD_startDate, d.EndDate AS SEGD_EndDate, c.*
+    FROM (
+      SELECT b."Value" AS SEGC_SegmentID, b.StartDate AS SEGC_startDate, b.EndDate AS SEGC_EndDate, a.*
+      FROM GBS_FACET_CORE_V.EAM_tbENRLSpans a
+      LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+        ON a.MemCodNum = b.MemCodNum
+       AND a.PlanID    = b.PlanID
+       AND (b.StartDate BETWEEN a.StartDate AND a.EndDate)
+       AND a.SPANTYPE  = 'PBP' AND b.SPANTYPE='SEGC'
+    ) c
+    LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+      ON c.MemCodNum = d.MemCodNum
+     AND c.PlanID    = d.PlanID
+     AND ((SEGC_startDate IS NOT NULL AND c.SEGC_startDate = d.StartDate) OR
+          (SEGC_startDate IS NULL     AND c.StartDate      = d.StartDate))
+     AND c.SPANTYPE  = 'PBP' AND d.SPANTYPE='SEGD'
+  ) tbe
+  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+    ON tbt.MemCodNum = tbe.MemCodNum
+   AND tbt.PlanID    = tbe.PlanID
+   AND tbt.PBPID     = tbe."Value"
+   AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+   AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+   AND tbt.TransStatus IN (5)
+  WHERE tbe.SpanType = 'PBP'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value"
+                             ORDER BY Span_EffDate DESC, Span_TermDate DESC) = 1
+) EAMSGMNT
+  ON  MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+  AND MBR.PlanID    = EAMSGMNT.PlanID
+  AND MBR.PBP       = EAMSGMNT.SpanValue
+JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+  ON  MBR.PlanID = PLN.PlanID
+  AND MBR.PBP    = PLN.PBPID
+LEFT JOIN (
+  SELECT MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+  FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+  WHERE AddressUse = '1'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1
+) PhyADDR
+  ON  MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY
+  AND MBR.MemCodNum    = PhyADDR.MemCodNum
+LEFT JOIN (
+  SELECT MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+  FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+  WHERE AddressUse = '2'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1
+) MailADDR
+  ON  MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY
+  AND MBR.MemCodNum    = MailADDR.MemCodNum
+LEFT JOIN (
+  SELECT memcodnum, "value" AS SPANSCC
+  FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+  WHERE spantype = 'SCC'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY memcodnum ORDER BY startdate DESC) = 1
+) SPAN
+  ON DMG.memcodnum = SPAN.memcodnum
 
----
+-- >>> Teradata refs that originally appeared AFTER SAR; we push them down now and carry their outputs forward.
+LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+  ON COALESCE(SPAN.SPANSCC, DMG.SCC1) = SC.SCC_CODE
+LEFT JOIN (
+  SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+  FROM REFDATA_CORE_V.STATE_COUNTY
+) STREF
+  ON SC.State = STREF.STATE_ABBREVIATED_NAME
+"""
 
-# ✅ **Step-by-Step Plan to Generate SAR Files**
+td_df = spark.read.jdbc(td_url, f"({td_sql_base}) t", properties=td_props)
+td_df.createOrReplaceTempView("TD_BASE_PUSHDOWN")
 
-This plan includes:
+# Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
+ref_state_df = spark.read.jdbc(
+    td_url,
+    "(SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY) r",
+    properties=td_props
+)
+ref_state_df.createOrReplaceTempView("REF_STATE")
 
-* SQL logic in Teradata
-* Output splitting and export
-* Summary and error file generation
-* File naming conventions
-* Optional scheduling
 
----
 
-## 🔹 STEP 1: **Create Required Lookup Tables (Temporary)**
 
-Run this in Teradata first:
 
-```sql
--- Drop and create SAR Plan inclusion list
-CREATE MULTISET VOLATILE TABLE VT_SAR_PLAN (...) ON COMMIT PRESERVE ROWS;
-INSERT INTO VT_SAR_PLAN VALUES (...);  -- Your SAR county list
 
--- Drop and create BOM mapping
-CREATE MULTISET VOLATILE TABLE VT_SAR_NR_BOM_2026 (...) ON COMMIT PRESERVE ROWS;
-INSERT INTO VT_SAR_NR_BOM_2026 VALUES (...);  -- Your Material/Replacement mapping
-```
+---------------
 
----
 
-## 🔹 STEP 2: **Run Final SAR Detail SQL in Teradata**
+-- If needed:
+-- USE CATALOG <your_catalog>;
+-- USE SCHEMA  <your_schema>;
 
-This is the fully built query:
+WITH SAR AS (
+  SELECT Contract, PBP, Segment, ServiceAreaCountyCode
+  FROM VT_SAR_PLAN
+),
+MBOM AS (
+  SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
+  FROM VT_SAR_NR_BOM_2026
+),
+MBOMNOST AS (
+  SELECT *
+  FROM (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
+    FROM VT_SAR_NR_BOM_2026
+  ) x
+  WHERE rn = 1
+),
+MBOMSTREF AS (   -- small state abbrev map for MBOMNOST.State -> abbrev (for PhysicalState fallback)
+  SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+  FROM REF_STATE
+)
 
-* Applies all SAR filters (contract, PBP, county)
-* Derives `Segment` using span/transaction logic
-* Joins with `VT_SAR_PLAN` and `VT_SAR_NR_BOM_2026`
-* Outputs **one row per eligible member**
+SELECT
+  TD.MEMCODNUM                            --N/A
+ ,TD.`Member ID`          AS "Member ID"
+ ,TD.LatestEffectiveDate  --N/A
+ ,TD.TermDate             --N/A
+ ,TD.CurrentStatus        --N/A
+ ,TD.OECCounty            --N/A
+ ,TD.DMGSCC1              --N/A
+ ,TD.DMGSCC2              --N/A
+ ,TD.FirstName            AS FirstName
+ ,TD.LastName             AS LastName
+ ,TD.PhyAddr1             AS PhyAddr1     --N/A
+ ,TD.PhyAddr2             AS PhyAddr2     --N/A
+ ,TD.PhyCity              AS PhyCity      --N/A
+ ,TD.PhyState             AS PhyState     --N/A
+ ,TD.PhyZip               AS PhyZip       --N/A
+ ,TD.MailAddr1            AS MailAddr1
+ ,TD.MailAddr2            AS MailAddr2
+ ,TD.MailCity             AS MailCity
+ ,TD.MailState            AS MailState
+ ,TD.MailZip              AS MailZip
+ ,TD.CContract            AS CContract
+ ,TD.CPBP                 AS CPBP
+ ,TD.CSegment             AS CSegment
+ ,TD.Span_EffDate
+ ,TD.Span_TermDate
+ ,TD.`Plan Name`          AS "Plan Name"
+ ,TD.SCCCode              AS SCCCode
+ ,TD.SPANSCC              --N/A
+ ,TD.SCC1                 --N/A
+ ,TD.LanguageText         AS LanguageText
+ ,TD."Alternate Format"   AS "Alternate Format"
+ ,TD.County               AS County
+ ,CASE
+     WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
+     ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
+  END AS PhysicalState
+ ,TD.CountyState          AS CountyState  --N/A
+ ,CASE
+     WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
+     ELSE MBOMNOST.State
+  END AS "Plan State"
+ ,TD.`Member ID`||'_SAR_'||(date_format(current_date(),'yyyyMMdd')) AS "Record ID"
+ ,CASE
+     WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
+     ELSE MBOMNOST.RecordType
+  END AS "Record Type"
+ ,CASE
+     WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
+     ELSE MBOMNOST.LetterMaterialID
+  END AS "Material ID"
+ ,CASE
+     WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
+     ELSE MBOMNOST.PLANReplacementID
+  END AS "Plan Replacement ID"
 
-💡 **Export this query’s result to CSV file** (you can use BTEQ, TPT, or Teradata Studio).
+FROM TD_BASE_PUSHDOWN TD
 
-Save as:
+-- original SAR position in flow
+JOIN SAR
+  ON TD.CContract = SAR.Contract
+ AND TD.CPBP     = SAR.PBP
+ AND TD.CSegment = SAR.Segment
+ AND TD.SCCCode  = SAR.ServiceAreaCountyCode
 
-```
-full_sar_output.csv
-```
+-- SC and STREF were executed in pushdown; their fields are already on TD_*
+-- We now only need the UC tables + small REF map:
 
----
+LEFT JOIN MBOM
+  ON TD.CContract = MBOM.Contract
+ AND TD.CPBP     = MBOM.PBP
+ AND TD.CSegment = MBOM.Segment
+ AND TD.CountyStateName = MBOM.State         -- was STREF.STATE_NAME in original
 
-## 🔹 STEP 3: **Load Output into Pandas (Python)**
+LEFT JOIN MBOMNOST
+  ON TD.CContract = MBOMNOST.Contract
+ AND TD.CPBP     = MBOMNOST.PBP
+ AND TD.CSegment = MBOMNOST.Segment
 
-```python
-import pandas as pd
-from datetime import datetime
-
-df = pd.read_csv("full_sar_output.csv")
-
-# Normalize CSegment
-df['CSegment'] = df['CSegment'].fillna('000').replace('', '000')
-today_str = datetime.today().strftime('%Y%m%d')
-```
-
----
-
-## 🔹 STEP 4: **Split into One File per Contract + PBP + Segment**
-
-```python
-for (contract, pbp, segment), group in df.groupby(['CContract', 'CPBP', 'CSegment']):
-    filename = f"2026SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{today_str}.txt"
-    group.to_csv(filename, sep="\t", index=False)
-```
-
-✅ Output: one file per Contract + PBP + Segment
-
----
-
-## 🔹 STEP 5: **Create Summary File**
-
-```python
-summary_df = df.groupby(['CContract', 'CPBP', 'CSegment']).size().reset_index(name='MemberCount')
-summary_filename = f"2026SAR_Mailing_Summary_{today_str}.txt"
-summary_df.to_csv(summary_filename, sep="\t", index=False)
-```
-
----
-
-## 🔹 STEP 6: **Create Error File for Missing Required Fields**
-
-```python
-required_cols = [
-    'Member ID', 'FirstName', 'LastName', 'Addr1', 'City', 'State', 'Zip',
-    'CContract', 'CPBP', 'CSegment', 'Plan Name', 'LanguageText',
-    'Plan State', 'Record ID', 'Record Type', 'Material ID', 'Plan Replacement ID'
-]
-
-error_df = df[df[required_cols].isnull().any(axis=1)]
-
-if not error_df.empty:
-    error_filename = f"2026SAR_Mailing_Fulfillment_error_{today_str}.txt"
-    error_df.to_csv(error_filename, sep="\t", index=False)
-```
-
----
-
-## 🔹 STEP 7: **Daily Run Strategy (Optional)**
-
-You can automate this:
-
-* **Databricks notebook**: SQL + file generation in one flow
-* **Airflow DAG**: Teradata extraction + Python tasks
-* **Scheduled Python script**: via cron or Windows Task Scheduler
-
----
-
-## 🔹 STEP 8: **File Delivery (Optional)**
-
-* Send to vendor SFTP
-* Upload to Azure Blob or AWS S3
-* Email alerts for errors
-
----
-
-## ✅ Files Generated Per Run
-
-| File Type       | Format               | File Naming Example                                      |
-| --------------- | -------------------- | -------------------------------------------------------- |
-| SAR Detail File | .txt (tab-delimited) | `2026SAR_Mailing_Fulfillment_H4513_003_000_20250715.txt` |
-| Summary File    | .txt                 | `2026SAR_Mailing_Summary_20250715.txt`                   |
-| Error File      | .txt                 | `2026SAR_Mailing_Fulfillment_error_20250715.txt`         |
-
----
-
-Let me know:
-
-* If you want me to generate the full Python script from these steps
-* If you want this adapted for `Contract + PBP` only (no Segment) later
-* Or want help generating the BTEQ export script from Teradata
+LEFT JOIN MBOMSTREF
+  ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+;
