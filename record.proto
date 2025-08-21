@@ -1,3 +1,718 @@
+# Databricks notebook source
+# dbutils.fs.rm("dbfs:/FileStore/tables/SARS_NR/", True)
+# dbutils.fs.mkdirs("dbfs:/FileStore/tables/SARS_NR/")
+dbutils.fs.ls("dbfs:/FileStore/tables/SARS_NR")
+
+# COMMAND ----------
+
+import getpass
+import teradatasql
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.window import Window
+from pyspark.sql.types import *
+from datetime import datetime, date
+import os
+
+# COMMAND ----------
+
+# NAS_OUTPUT_PATH = "\\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files\MailDateResponseFiles"
+CURRENT_YEAR = "2026"
+OUTPUT_BASE_PATH = "/Volumes/gedp_dev/volumes/sar_nr_output_files"
+MAIL_DATE_RESPONSE_PATH = f"{OUTPUT_BASE_PATH}/MailDateResponseFiles"
+ERROR_TRACKING_TABLE = "core_refdata.sar_nr_error_tracking"
+PROCESSED_MEMBERS_TABLE = "core_refdata.sar_nr_processed_members"
+
+# COMMAND ----------
+
+# Setup Teradata Connection
+def setup_teradata_connection():
+    """Setup Teradata connection with user credentials"""
+    username = input("Enter username (personal LAN ID or service account username): ").strip()
+    password = getpass.getpass("Enter password for username: ").strip()
+    tdv_host = "HSTNTDUAT.HEALTHSPRING.INSIDE"
+    
+    connection_config = {
+        "host": tdv_host,
+        "username": username,
+        "password": password,
+        "connection_string_read": f"jdbc:teradata://{tdv_host}/LOGMECH=LDAP,COLUMN_NAME=ON,TYPE=FASTEXPORT",
+        "driver": "com.teradata.jdbc.TeraDriver"
+    }
+    return connection_config
+
+def read_teradata_table(spark, config, query):
+    """Read data from Teradata using provided query"""
+    df = (spark.read
+        .format("jdbc")
+        .option('driver', config["driver"])
+        .option("url", config["connection_string_read"])
+        .option("query", query)
+        .option("user", config["username"])
+        .option("password", config["password"])
+        .load()
+    )
+    return df
+
+# COMMAND ----------
+
+def get_sar_data(spark, config, is_initial_load=True):
+    """
+    Extract member data from Teradata and Databricks tables
+    For daily runs after initial load, only get new enrollments
+    EXACTLY MATCHING THE ORIGINAL SQL LOGIC
+    """
+    
+    # For incremental loads, we need to get all eligible members first,
+    # then filter out already processed ones using anti-join
+    
+    # EXACT SQL from requirements - extracting all Teradata data first
+    td_sar_sql_base = """
+            SELECT
+            MBR.MEMCODNUM --N/A
+            ,MBR.MemberID as "Member ID"
+            ,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+            ,MBR.TermDate as TermDate --N/A
+            ,MBRS.Description as CurrentStatus --N/A 
+            ,DMG.OECCounty --N/A
+            ,DMG.SCC1 as DMGSCC1 --N/A
+            ,DMG.SCC2 as DMGSCC2 --N/A
+            ,DMG.FirstName as FirstName
+            ,DMG.LastName as LastName
+            ,PhyADDR.Address1 as PhyAddr1 --N/A
+            ,PhyADDR.Address2 as PhyAddr2 --N/A
+            ,PhyADDR.City as PhyCity --N/A
+            ,PhyADDR.State as PhyState --N/A
+            ,CASE 
+            WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+            ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+            END as PhyZip --N/A
+            ,MailADDR.Address1 as MailAddr1
+            ,MailADDR.Address2 as MailAddr2
+            ,MailADDR.City as MailCity
+            ,MailADDR.State as MailState
+            ,CASE 
+            WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+            ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+            END as MailZip
+            ,MBR.PlanID as CContract
+            ,MBR.PBP as CPBP
+            ,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+            ,EAMSGMNT.Span_EffDate
+            ,EAMSGMNT.Span_TermDate
+            ,PLN.ProductName as "Plan Name"
+            ,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+            ,SPAN.SPANSCC --N/A 
+            ,DMG.SCC1 --N/A 
+            ,COALESCE(DMG."Language",'ENG') as LanguageText
+            ,CASE 
+                WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+                WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+                WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+                WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+                ELSE '' 
+                END AS "Alternate Format"
+            ,SC.CountyName as County
+            ,SC.State                     AS CountyState         --N/A
+            ,STREF.STATE_NAME             AS CountyStateName     -- used later 
+
+            FROM (
+      SELECT
+      MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+      FROM GBS_FACET_CORE_QA_V.EAM_tbEENRLMembers
+      WHERE SRC_DATA_KEY = '210'
+      and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+ 
+      JOIN GBS_FACET_CORE_QA_V.EAM_tbMemberInfo DMG
+      ON    MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY
+      AND MBR.MemCodNum = DMG.MemCodNum
+      --AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+ 
+      JOIN GBS_FACET_CORE_QA_V.EAM_tbMemberStatus MBRS
+      ON MBR.MemberStatus = MBRS.Status
+      --AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation
+     
+      LEFT JOIN
+      (
+            Select
+                        tbe.PlanID,
+                        tbe.MemCodNum,
+                        tbe.HIC AS SpanMBINumber,
+                        tbe.SPANTYPE AS SpanType,
+                        tbe."Value" AS SpanValue,
+                        CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+                        CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+                        CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+                        CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+                        Tbt.DateCreated AS TR_CREATE_DATE,
+                        --SegmentId population preference: SEGC, SEGD, Transactions, Default000
+                        COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+                        SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                   FROM (
+                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                          a.* from GBS_FACET_CORE_QA_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_QA_V.EAM_tbENRLSpans b
+                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c
+               LEFT JOIN GBS_FACET_CORE_QA_V.EAM_tbENRLSpans d
+                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                     ) tbe  LEFT JOIN GBS_FACET_CORE_QA_V.EAM_tbTransactions tbt
+                                        ON tbt.MemCodNum = tbe.MemCodNum
+                                          AND tbt.PlanID = tbe.PlanID
+                                          AND tbt.PBPID = tbe."Value"
+                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                          AND tbt.TransStatus IN (5)
+                                          WHERE tbe.SpanType = 'PBP'
+                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                          ) EAMSGMNT
+                                                             
+      ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+      AND MBR.PlanID = EAMSGMNT.PlanID
+      AND MBR.PBP = EAMSGMNT.SpanValue
+ 
+      JOIN GBS_FACET_CORE_QA_V.EAM_tbPlan_PBP PLN
+      ON MBR.PlanID = PLN.PlanID
+      AND MBR.PBP = PLN.PBPID
+ 
+      LEFT JOIN (
+      SELECT
+      MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+      FROM GBS_FACET_CORE_QA_V.EAM_MemberManagerAddress
+      WHERE AddressUse = '1'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR
+      ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY
+      AND MBR.MemCodNum = PhyADDR.MemCodNum
+ 
+      LEFT JOIN (
+      SELECT
+      MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+      FROM GBS_FACET_CORE_QA_V.EAM_MemberManagerAddress
+      WHERE AddressUse = '2'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR
+      ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY
+      AND MBR.MemCodNum = MailADDR.MemCodNum
+     
+      LEFT JOIN (
+      select
+      memcodnum, "value" as SPANSCC 
+      FROM GBS_FACET_CORE_QA_V.EAM_tbENRLSpans
+      WHERE spantype = 'SCC'
+      qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+      ON dmg.memcodnum = span.memcodnum     
+      LEFT JOIN GBS_FACET_CORE_QA_V.EAM_TB_EAM_SCC_STATES SC
+      ON SCCCode = SC.SCC_CODE
+      LEFT JOIN 
+      (
+        SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_QA_V.STATE_COUNTY) STREF
+       ON SC.State = STREF.STATE_ABBREVIATED_NAME
+        """
+        
+    # Read data from Teradata
+    print("Reading data from Teradata...")
+    td_df = read_teradata_table(spark, config, td_sar_sql_base)
+    print("Display base TD data")
+    # display(td_df)
+    print("Done Reading base data from Teradata...")
+    # Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
+    ref_state_sql = "SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY"
+    ref_state_df = read_teradata_table(spark, config, ref_state_sql)
+    ref_state_df.createOrReplaceTempView("REF_STATE")
+    
+    
+    # For incremental loads, filter out already processed members
+    if not is_initial_load:
+        try:
+            # Read processed members table
+            processed_members_df = spark.table(PROCESSED_MEMBERS_TABLE).select("MEMCODNUM").distinct()
+            
+            # Anti-join to get only new/unprocessed members
+            print(f"Filtering out already processed members...")
+            td_df = td_df.join(
+                processed_members_df,
+                td_df.MEMCODNUM == processed_members_df.MEMCODNUM,
+                "left_anti"
+            )
+            
+            # Also get members that might have plan changes (different Contract/PBP/Segment)
+            # This captures members who switched plans
+            processed_with_plan_df = spark.table(PROCESSED_MEMBERS_TABLE).select(
+                "MEMCODNUM", "CContract", "CPBP", "CSegment"
+            ).distinct()
+            
+            # Get members with plan changes
+            plan_change_df = td_df.alias("new").join(
+                processed_with_plan_df.alias("old"),
+                (col("new.MEMCODNUM") == col("old.MEMCODNUM")) &
+                ((col("new.CContract") != col("old.CContract")) |
+                 (col("new.CPBP") != col("old.CPBP")) |
+                 (col("new.CSegment") != col("old.CSegment"))),
+                "inner"
+            ).select(col("new.*"))
+            
+            # Union new members and plan changes
+            td_df = td_df.union(plan_change_df).distinct()
+            
+            print(f"Found {td_df.count()} new/changed members to process")
+            
+        except Exception as e:
+            print(f"Processed members table not found, treating as initial load: {str(e)}")
+    
+    # Cache the DataFrame for multiple operations
+    td_df.createOrReplaceTempView("TD_BASE_PUSHDOWN")
+    print("Creating Base TD Base View...")
+
+    sar_bom_join_sql = """
+    WITH SAR AS (
+    SELECT Contract, PBP, Segment, ServiceAreaCountyCode
+    FROM core_refdata.SAR_PLAN
+    ),
+    MBOM AS (
+    SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
+    FROM core_refdata.SAR_NR_BOM_2026
+    ),
+    MBOMNOST AS (
+    SELECT *
+    FROM (
+        SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
+        FROM core_refdata.SAR_NR_BOM_2026
+    ) x
+    WHERE rn = 1
+    ),
+    MBOMSTREF AS (   -- small state abbrev map for MBOMNOST.State -> abbrev (for PhysicalState fallback)
+    SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+    FROM REF_STATE
+    )
+
+    SELECT
+    TD.MEMCODNUM                            --N/A
+    ,TD.`Member ID`          AS `Member ID`
+    ,TD.LatestEffectiveDate  --N/A
+    ,TD.TermDate             --N/A
+    ,TD.CurrentStatus        --N/A
+    ,TD.OECCounty            --N/A
+    ,TD.DMGSCC1              --N/A
+    ,TD.DMGSCC2              --N/A
+    ,TD.FirstName            AS FirstName
+    ,TD.LastName             AS LastName
+    ,TD.PhyAddr1             AS PhyAddr1     --N/A
+    ,TD.PhyAddr2             AS PhyAddr2     --N/A
+    ,TD.PhyCity              AS PhyCity      --N/A
+    ,TD.PhyState             AS PhyState     --N/A
+    ,TD.PhyZip               AS PhyZip       --N/A
+    ,TD.MailAddr1            AS MailAddr1
+    ,TD.MailAddr2            AS MailAddr2
+    ,TD.MailCity             AS MailCity
+    ,TD.MailState            AS MailState
+    ,TD.MailZip              AS MailZip
+    ,TD.CContract            AS CContract
+    ,TD.CPBP                 AS CPBP
+    ,TD.CSegment             AS CSegment
+    ,TD.Span_EffDate
+    ,TD.Span_TermDate
+    ,TD.`Plan Name`          AS `Plan Name`
+    ,TD.SCCCode              AS SCCCode
+    ,TD.SPANSCC              --N/A
+    ,TD.SCC1                 --N/A
+    ,TD.LanguageText         AS LanguageText
+    ,TD.`Alternate Format`   AS `Alternate Format`
+    ,TD.County               AS County
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
+        ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
+    END AS PhysicalState
+    ,TD.CountyState          AS CountyState  --N/A
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
+        ELSE MBOMNOST.State
+    END AS `Plan State`
+    ,TD.`Member ID`||'_SAR_'||(date_format(current_date(),'yyyyMMdd')) AS `Record ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
+        ELSE MBOMNOST.RecordType
+    END AS `Record Type`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
+        ELSE MBOMNOST.LetterMaterialID
+    END AS `Material ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
+        ELSE MBOMNOST.PLANReplacementID
+    END AS `Plan Replacement ID`
+
+    FROM TD_BASE_PUSHDOWN TD
+
+    -- original SAR position in flow
+    JOIN SAR
+    ON TD.CContract = SAR.Contract
+    AND TD.CPBP     = SAR.PBP
+    AND TD.CSegment = SAR.Segment
+    AND TD.SCCCode  = SAR.ServiceAreaCountyCode
+
+    -- SC and STREF were executed in pushdown; their fields are already on TD_*
+
+    LEFT JOIN MBOM
+    ON TD.CContract = MBOM.Contract
+    AND TD.CPBP     = MBOM.PBP
+    AND TD.CSegment = MBOM.Segment
+    AND TD.CountyStateName = MBOM.State
+
+    LEFT JOIN MBOMNOST
+    ON TD.CContract = MBOMNOST.Contract
+    AND TD.CPBP     = MBOMNOST.PBP
+    AND TD.CSegment = MBOMNOST.Segment
+
+    LEFT JOIN MBOMSTREF
+    ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+    """
+    result_df = spark.sql(sar_bom_join_sql)
+    return result_df
+
+# COMMAND ----------
+
+def get_nr_data(spark, config, is_initial_load=True):
+    """
+    Extract member data from Teradata and Databricks tables
+    For daily runs after initial load, only get new enrollments
+    EXACTLY MATCHING THE ORIGINAL SQL LOGIC
+    """
+    
+    # For incremental loads, we need to get all eligible members first,
+    # then filter out already processed ones using anti-join
+    
+    # EXACT SQL from requirements - extracting all Teradata data first
+    td_nr_sql_base = """SELECT
+        MBR.MEMCODNUM --N/A
+        ,MBR.MemberID as "Member ID"
+        ,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+        ,MBR.TermDate as TermDate --N/A
+        ,MBRS.Description as CurrentStatus --N/A 
+        ,DMG.OECCounty --N/A
+        ,DMG.SCC1 as DMGSCC1 --N/A
+        ,DMG.SCC2 as DMGSCC2 --N/A
+        ,DMG.FirstName as FirstName
+        ,DMG.LastName as LastName
+        ,PhyADDR.Address1 as PhyAddr1 --N/A
+        ,PhyADDR.Address2 as PhyAddr2 --N/A
+        ,PhyADDR.City as PhyCity --N/A
+        ,PhyADDR.State as PhyState --N/A
+        ,CASE 
+        WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+        ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+        END as PhyZip --N/A
+        ,MailADDR.Address1 as MailAddr1
+        ,MailADDR.Address2 as MailAddr2
+        ,MailADDR.City as MailCity
+        ,MailADDR.State as MailState
+        ,CASE 
+        WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+        ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+        END as MailZip
+        ,MBR.PlanID as CContract
+        ,MBR.PBP as CPBP
+        ,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+        ,EAMSGMNT.Span_EffDate
+        ,EAMSGMNT.Span_TermDate
+        ,PLN.ProductName as "Plan Name"
+        ,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+        ,SPAN.SPANSCC --N/A
+        ,DMG.SCC1 --N/A
+        ,COALESCE(DMG."Language",'ENG') as LanguageText
+        ,CASE 
+            WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+            WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+            WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+            WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+            ELSE '' 
+            END AS "Alternate Format"
+        ,SC.CountyName as County
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN PhyADDR.State 
+            Else MBOMSTREF.STATE_ABBREVIATED_NAME 
+            END AS PhysicalState
+        ,SC.State as CountyState --N/A
+        --,NR.State as NRInclusionState
+        --,COALESCE(BOMWITHST.State,BOMNOST.State) as "Plan State"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.State,BOMNOST.State) 
+            Else BOMNOST.State 
+            END AS "Plan State"
+        ,MemberID||'_NR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
+        --,COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) as "Record Type"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) 
+            Else BOMNOST.RecordType 
+            END AS "Record Type"
+        --,COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) as "Material ID"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) 
+            Else BOMNOST.LetterMaterialID 
+            END AS "Material ID"
+        --,COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID) as "Plan Replacement ID"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID)  
+            Else BOMNOST.PLANReplacementID 
+            END AS "Plan Replacement ID"
+
+        FROM (
+            SELECT
+            MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+            FROM GBS_FACET_CORE_QA_V.EAM_tbEENRLMembers
+            WHERE SRC_DATA_KEY = '210'
+            and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+
+            JOIN GBS_FACET_CORE_QA_V.EAM_tbMemberInfo DMG
+            ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+            AND MBR.MemCodNum = DMG.MemCodNum
+            --AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+
+            JOIN GBS_FACET_CORE_QA_V.EAM_tbMemberStatus MBRS
+            ON MBR.MemberStatus = MBRS.Status
+            --AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+            
+            LEFT JOIN 
+            (
+                Select 
+                        tbe.PlanID,
+                        tbe.MemCodNum,
+                        tbe.HIC AS SpanMBINumber,
+                        tbe.SPANTYPE AS SpanType,
+                        tbe."Value" AS SpanValue,
+                        CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+                        CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+                        CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+                        CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+                        Tbt.DateCreated AS TR_CREATE_DATE,
+                        --SegmentId population preference: SEGC, SEGD, Transactions, Default000
+                        COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+                        SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                        FROM (
+                        --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                        select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                        (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                                a.* from GBS_FACET_CORE_QA_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_QA_V.EAM_tbENRLSpans b
+                                ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+                    LEFT JOIN GBS_FACET_CORE_QA_V.EAM_tbENRLSpans d
+                                        ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                            ) tbe  LEFT JOIN GBS_FACET_CORE_QA_V.EAM_tbTransactions tbt
+                                                ON tbt.MemCodNum = tbe.MemCodNum
+                                                AND tbt.PlanID = tbe.PlanID
+                                                AND tbt.PBPID = tbe."Value"
+                                                AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                                AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                                AND tbt.TransStatus IN (5)
+                                                WHERE tbe.SpanType = 'PBP'
+                                                QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                                ) EAMSGMNT
+                                                
+            ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+            AND MBR.PlanID = EAMSGMNT.PlanID
+            AND MBR.PBP = EAMSGMNT.SpanValue
+
+            JOIN GBS_FACET_CORE_QA_V.EAM_tbPlan_PBP PLN
+            ON MBR.PlanID = PLN.PlanID
+            AND MBR.PBP = PLN.PBPID
+
+            LEFT JOIN (
+            SELECT 
+            MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+            FROM GBS_FACET_CORE_QA_V.EAM_MemberManagerAddress
+            WHERE AddressUse = '1'
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+            ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+            AND MBR.MemCodNum = PhyADDR.MemCodNum
+
+            LEFT JOIN (
+            SELECT 
+            MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+            FROM GBS_FACET_CORE_QA_V.EAM_MemberManagerAddress
+            WHERE AddressUse = '2'
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+            ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+            AND MBR.MemCodNum = MailADDR.MemCodNum
+            
+            LEFT JOIN (
+            select 
+            memcodnum, "value" as SPANSCC  
+            FROM GBS_FACET_CORE_QA_V.EAM_tbENRLSpans
+            WHERE spantype = 'SCC'
+            qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+            ON dmg.memcodnum = span.memcodnum
+
+            LEFT JOIN GBS_FACET_CORE_QA_V.EAM_TB_EAM_SCC_STATES SC
+            ON SCCCode = SC.SCC_CODE
+            
+            LEFT JOIN 
+            (
+                SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_QA_V.STATE_COUNTY) STREF
+            ON PhyADDR.State = STREF.STATE_ABBREVIATED_NAME 
+    """
+        
+    # Read data from Teradata
+    print("Reading data from Teradata...")
+    td_df = read_teradata_table(spark, config, td_sar_sql_base)
+    print("Display base TD data")
+    # display(td_df)
+    print("Done Reading base data from Teradata...")
+    # Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
+    ref_state_sql = "SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_QA_V.STATE_COUNTY"
+    ref_state_df = read_teradata_table(spark, config, ref_state_sql)
+    ref_state_df.createOrReplaceTempView("REF_NR_STATE")
+    
+    
+    # For incremental loads, filter out already processed members
+    if not is_initial_load:
+        try:
+            # Read processed members table
+            processed_members_df = spark.table(PROCESSED_MEMBERS_TABLE).select("MEMCODNUM").distinct()
+            
+            # Anti-join to get only new/unprocessed members
+            print(f"Filtering out already processed members...")
+            td_df = td_df.join(
+                processed_members_df,
+                td_df.MEMCODNUM == processed_members_df.MEMCODNUM,
+                "left_anti"
+            )
+            
+            # Also get members that might have plan changes (different Contract/PBP/Segment)
+            # This captures members who switched plans
+            processed_with_plan_df = spark.table(PROCESSED_MEMBERS_TABLE).select(
+                "MEMCODNUM", "CContract", "CPBP", "CSegment"
+            ).distinct()
+            
+            # Get members with plan changes
+            plan_change_df = td_df.alias("new").join(
+                processed_with_plan_df.alias("old"),
+                (col("new.MEMCODNUM") == col("old.MEMCODNUM")) &
+                ((col("new.CContract") != col("old.CContract")) |
+                 (col("new.CPBP") != col("old.CPBP")) |
+                 (col("new.CSegment") != col("old.CSegment"))),
+                "inner"
+            ).select(col("new.*"))
+            
+            # Union new members and plan changes
+            td_df = td_df.union(plan_change_df).distinct()
+            
+            print(f"Found {td_df.count()} new/changed members to process")
+            
+        except Exception as e:
+            print(f"Processed members table not found, treating as initial load: {str(e)}")
+    
+    # Cache the DataFrame for multiple operations
+    td_df.createOrReplaceTempView("TD_NR_BASE_PUSHDOWN")
+    print("Creating Base TD Base View...")
+
+    nr_bom_join_sql = """
+    WITH NR AS (
+    SELECT Contract, PBP, Segment
+    FROM core_refdata.NR_PLAN group by 1,2,3
+    ),
+    MBOM AS (
+    SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
+    FROM core_refdata.SAR_NR_BOM_2026
+    ),
+    MBOMNOST AS (
+    SELECT *
+    FROM (
+        SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
+        FROM core_refdata.SAR_NR_BOM_2026
+    ) x
+    WHERE rn = 1
+    ),
+    MBOMSTREF AS (   -- small state abbrev map for MBOMNOST.State -> abbrev (for PhysicalState fallback)
+    SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+    FROM REF_NR_STATE
+    )
+
+    SELECT
+    TD.MEMCODNUM                            --N/A
+    ,TD.`Member ID`          AS `Member ID`
+    ,TD.LatestEffectiveDate  --N/A
+    ,TD.TermDate             --N/A
+    ,TD.CurrentStatus        --N/A
+    ,TD.OECCounty            --N/A
+    ,TD.DMGSCC1              --N/A
+    ,TD.DMGSCC2              --N/A
+    ,TD.FirstName            AS FirstName
+    ,TD.LastName             AS LastName
+    ,TD.PhyAddr1             AS PhyAddr1     --N/A
+    ,TD.PhyAddr2             AS PhyAddr2     --N/A
+    ,TD.PhyCity              AS PhyCity      --N/A
+    ,TD.PhyState             AS PhyState     --N/A
+    ,TD.PhyZip               AS PhyZip       --N/A
+    ,TD.MailAddr1            AS MailAddr1
+    ,TD.MailAddr2            AS MailAddr2
+    ,TD.MailCity             AS MailCity
+    ,TD.MailState            AS MailState
+    ,TD.MailZip              AS MailZip
+    ,TD.CContract            AS CContract
+    ,TD.CPBP                 AS CPBP
+    ,TD.CSegment             AS CSegment
+    ,TD.Span_EffDate
+    ,TD.Span_TermDate
+    ,TD.`Plan Name`          AS `Plan Name`
+    ,TD.SCCCode              AS SCCCode
+    ,TD.SPANSCC              --N/A
+    ,TD.SCC1                 --N/A
+    ,TD.LanguageText         AS LanguageText
+    ,TD.`Alternate Format`   AS `Alternate Format`
+    ,TD.County               AS County
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
+        ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
+    END AS PhysicalState
+    ,TD.CountyState          AS CountyState  --N/A
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
+        ELSE MBOMNOST.State
+    END AS `Plan State`
+    ,TD.`Member ID`||'_SAR_'||(date_format(current_date(),'yyyyMMdd')) AS `Record ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
+        ELSE MBOMNOST.RecordType
+    END AS `Record Type`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
+        ELSE MBOMNOST.LetterMaterialID
+    END AS `Material ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
+        ELSE MBOMNOST.PLANReplacementID
+    END AS `Plan Replacement ID`
+
+    FROM TD_BASE_PUSHDOWN TD
+
+    -- original NR position in flow
+    JOIN NR
+    ON TD.CContract = NR.Contract
+    AND TD.CPBP     = NR.PBP
+    AND TD.CSegment = NR.Segment
+
+    -- SC and STREF were executed in pushdown; their fields are already on TD_*
+
+    LEFT JOIN MBOM
+    ON TD.CContract = MBOM.Contract
+    AND TD.CPBP     = MBOM.PBP
+    AND TD.CSegment = MBOM.Segment
+    AND TD.CountyStateName = MBOM.State
+
+    LEFT JOIN MBOMNOST
+    ON TD.CContract = MBOMNOST.Contract
+    AND TD.CPBP     = MBOMNOST.PBP
+    AND TD.CSegment = MBOMNOST.Segment
+
+    LEFT JOIN MBOMSTREF
+    ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+    """
+    result_df = spark.sql(nr_bom_join_sql)
+    return result_df
+
+# COMMAND ----------
+
 def validate_and_split_records(df):
     """
     Validate records and split into valid and error dataframes
@@ -8,26 +723,25 @@ def validate_and_split_records(df):
     fallout_exclusion_sql = """
         select 
         Case 
-        when PhysicalState <> CountyState Then 'Valid, Physical Address State '||PhysicalState||', SCC State '||CountyState
+        when PhysicalState != CountyState Then 'Valid, Physical Address State '||PhysicalState||', SCC State '||CountyState
         when MailAddr1 is NULL Then 'Fallout, no mailing address'
         when "Member ID" is NULL Then 'Fallout, no member ID'
         when FirstName is NULL Then 'Fallout, no first name'
-        when LastName is NUC8R6KNLL Then 'Fallout, no last name'
+        when LastName is NULL Then 'Fallout, no last name'
         when MailCity is NULL Then 'Fallout, no mail address city'
         when MailState is NULL Then 'Fallout, no mail address state'
         when MailZip is NULL Then 'Fallout, no mail address zip'
         When "Plan Name" is NULL Then 'Fallout, no plan name'
         When PhyState is NULL Then 'Fallout, no physical address state'
         when "Material ID" is NULL Then 'BOM, Missing Data'
-        --when CurrentStatus = 'Not Enrolled' and RIGHT("Member ID",2)='XX' Then 'Do not report, not enrolled'
         when CurrentStatus = 'Not Enrolled' Then 'Do not report, not enrolled'
-        when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') < current_date and Span_EffDate IS NULL 
-            Then 'Do not report, member effective date is in the past, has no span and is considered canceled'
-        when CurrentStatus = 'Pending' and cast(substr(LatestEffectiveDate,1,10) as date format 'YYYY-MM-DD') >= current_date and Span_EffDate IS NULL 
-            Then 'Fallout, member status pending with effective date in future with no span'
+        WHEN CurrentStatus = 'Pending' AND to_date(substring(LatestEffectiveDate,1,10), 'yyyy-MM-dd') < current_date() AND Span_EffDate IS NULL
+        THEN 'Do not report, member effective date is in the past, has no span and is considered canceled'
+        WHEN CurrentStatus = 'Pending' AND to_date(substring(LatestEffectiveDate,1,10), 'yyyy-MM-dd') >= current_date() AND Span_EffDate IS NULL
+        THEN 'Fallout, member status pending with effective date in future with no span'
         when CurrentStatus = 'Pending' Then 'Valid, status pending and effectivedate in future with span'
         when SCCCode is null then 'Fallout, no SCC'
-        Else 'Valid' end as Comments,
+        Else 'Valid' end as ValidationStatus,
         t.* from TD_SAR_VW t"""
     
     fallout_exclusion_df = spark.sql(fallout_exclusion_sql)
@@ -42,3 +756,355 @@ def validate_and_split_records(df):
         (col("ValidationStatus").startswith("BOM"))
     )
     return valid_df, error_df
+
+# COMMAND ----------
+
+from pyspark.sql import DataFrame
+
+def sanitize_column_names(df: DataFrame) -> DataFrame:
+    """
+    Replaces spaces in column names with underscores in a PySpark DataFrame.
+    
+    Args:
+        df (DataFrame): Input PySpark DataFrame.
+    
+    Returns:
+        DataFrame: DataFrame with sanitized column names.
+    """
+    sanitized_columns = [col.replace(" ", "") for col in df.columns]
+    return df.toDF(*sanitized_columns)
+
+# COMMAND ----------
+
+def process_error_tracking(spark, error_df, is_initial_load=True):
+    """
+    Manage error tracking table
+    For daily runs, check if previously errored members now have complete data
+    Prevents duplicate error records by updating existing ones
+    """
+    
+    # Add processing timestamp
+    error_df = error_df.withColumn("ProcessingDate", current_timestamp())
+    
+    if is_initial_load:
+        # Create or replace error tracking table for initial load
+        print(f"Initial load: Creating error tracking table with {error_df.count()} error records")
+        error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+    else:
+        # For incremental loads, handle existing error table properly
+        try:
+            existing_errors_df = spark.table(ERROR_TRACKING_TABLE)
+            
+            # Remove any existing records for MEMCODNUMs that have new errors
+            # This prevents duplicates - we'll keep the latest error status
+            remaining_existing_errors = existing_errors_df.join(
+                error_df.select("MEMCODNUM").distinct(),
+                "MEMCODNUM",
+                "left_anti"  # Keep only records NOT in new error_df
+            )
+            
+            # Combine remaining existing errors with new errors
+            # This ensures we have the latest error status for each member
+            updated_errors_df = remaining_existing_errors.unionByName(error_df, allowMissingColumns=True)
+            
+            # Overwrite the error tracking table with updated data
+            print(f"Incremental load: Updating error tracking table")
+            print(f"  - Previous error count: {existing_errors_df.count()}")
+            print(f"  - New errors found: {error_df.count()}")
+            print(f"  - Updated total errors: {updated_errors_df.count()}")
+            
+            updated_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+            
+        except Exception as e:
+            # Table doesn't exist, create it
+            print(f"Error tracking table not found, creating new one: {str(e)}")
+            error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+    
+    return error_df
+
+# COMMAND ----------
+
+def generate_vendor_files(valid_df, error_df, output_path):
+    """
+    Generate vendor files per Contract/PBP/Segment combination
+    Following business requirements 1.1 - 1.3
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Get unique combinations of Contract, PBP, and Segment
+    combinations = valid_df.select("CContract", "CPBP", "CSegment").distinct().collect()
+    
+    files_generated = []
+    
+    for row in combinations:
+        contract = row["CContract"]
+        pbp = row["CPBP"]
+        # Handle null/blank segment as per requirement 1.2.1.2
+        segment = row["CSegment"] if row["CSegment"] and row["CSegment"] != "" else "000"
+        
+        # Filter data for this combination
+        subset_df = valid_df.filter(
+            (col("CContract") == contract) & 
+            (col("CPBP") == pbp) & 
+            (col("CSegment") == segment)
+        )
+        
+        # Generate filename as per requirement 1.2.1
+        filename = f"{CURRENT_YEAR}SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}.csv"
+        file_path = f"{output_path}/{filename}"
+        
+        # Write to CSV with tab delimiter as per requirement 1.1.2
+        subset_df.toPandas().to_csv(file_path, index=False)
+        display(subset_df)
+        
+        files_generated.append({
+            "Contract": contract,
+            "PBP": pbp,
+            "Segment": segment,
+            "RecordCount": subset_df.count(),
+            "FileName": filename
+        })
+    
+    # Generate error files for each combination with errors (requirement 1.3.6)
+    if error_df.count() > 0:
+        error_combinations = error_df.select("CContract", "CPBP", "CSegment").distinct().collect()
+        
+        for row in error_combinations:
+            contract = row["CContract"] if row["CContract"] else "UNKNOWN"
+            pbp = row["CPBP"] if row["CPBP"] else "UNKNOWN"
+            segment = row["CSegment"] if row["CSegment"] and row["CSegment"] != "" else "000"
+            
+            # Filter error data for this combination
+            error_subset_df = error_df.filter(
+                ((col("CContract") == contract) | col("CContract").isNull()) & 
+                ((col("CPBP") == pbp) | col("CPBP").isNull()) & 
+                ((col("CSegment") == segment) | col("CSegment").isNull())
+            )
+            
+            # Generate error filename
+            error_filename = f"{CURRENT_YEAR}SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}_error.csv"
+            error_file_path = f"{output_path}/{error_filename}"
+            
+            # Write error file with validation status
+            error_subset_df.coalesce(1).write.mode("overwrite").option("delimiter", "\t").option("header", "true").csv(error_file_path)
+            
+            files_generated.append({
+                "Contract": contract,
+                "PBP": pbp,
+                "Segment": segment,
+                "RecordCount": error_subset_df.count(),
+                "FileName": error_filename,
+                "Type": "ERROR"
+            })
+    
+    return files_generated
+
+# COMMAND ----------
+
+def generate_summary_report(valid_df, output_path):
+    """
+    Generate summary report with counts by Contract/PBP/Segment
+    Following business requirements 2.1 - 2.4
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Group by Contract, PBP, and Segment and count (requirement 2.3.1)
+    summary_df = valid_df.groupBy("CContract", "CPBP", "CSegment").agg(
+        count("*").alias("TotalCount")
+    ).withColumnRenamed("CContract", "New year Contract") \
+     .withColumnRenamed("CPBP", "New year PBP") \
+     .withColumnRenamed("CSegment", "New Year Segment") \
+     .withColumnRenamed("TotalCount", "Total count of membership")
+    
+    # Generate filename as per requirement 2.2.1
+    summary_filename = f"GBSF_MAPD_SAR_Summary_{current_date_str}.csv"
+    summary_file_path = f"{output_path}/{summary_filename}"
+    
+    # Write summary report as CSV (requirement 2.1.1)
+    summary_df.toPandas().to_csv(summary_file_path, index=False)
+    display(summary_df)
+    
+    return summary_filename, summary_df.count()
+
+# COMMAND ----------
+
+def generate_reconciliation_report(spark, vendor_response_path, output_path):
+    """
+    Generate reconciliation report comparing vendor mail dates with outbound files
+    Following business requirements 3.1 - 3.3
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    try:
+        # Read vendor response files with mail dates
+        vendor_response_df = spark.read.option("delimiter", "\t").option("header", "true").csv(f"{vendor_response_path}/*.csv")
+        
+        # Read processed members table
+        processed_df = spark.table(PROCESSED_MEMBERS_TABLE)
+        
+        # Find members without mail dates (requirement 3.3.2)
+        missing_mail_date_df = processed_df.join(
+            vendor_response_df,
+            processed_df["Record ID"] == vendor_response_df["Record ID"],
+            "left_anti"
+        ).select("Member ID", "Record ID")
+        
+        # Generate reconciliation report filename as per requirement 3.2.1
+        recon_filename = f"GBSF_SAR_MissingMailDate_{current_date_str}.csv"
+        recon_file_path = f"{MAIL_DATE_RESPONSE_PATH}/{recon_filename}"
+        
+        # Write reconciliation report as CSV (requirement 3.1.1)
+        # missing_mail_date_df.coalesce(1).write.mode("overwrite").option("header", "true").csv(recon_file_path)
+        
+        return recon_filename, missing_mail_date_df.count()
+        
+    except Exception as e:
+        print(f"Reconciliation report generation skipped: {str(e)}")
+        return None, 0
+
+# COMMAND ----------
+
+def track_processed_members(spark, valid_df, is_initial_load=True):
+    """
+    Track processed members for reconciliation and duplicate prevention
+    """
+    processed_df = valid_df.select(
+        "MEMCODNUM",
+        "MemberID",
+        "RecordID",
+        "CContract",
+        "CPBP",
+        "CSegment"
+    ).withColumn("ProcessedDate", current_timestamp())
+    
+    if is_initial_load:
+        processed_df.write.mode("overwrite").saveAsTable(PROCESSED_MEMBERS_TABLE)
+    else:
+        processed_df.write.mode("append").saveAsTable(PROCESSED_MEMBERS_TABLE)
+
+
+# COMMAND ----------
+
+def check_and_reprocess_errors(spark, new_valid_df):
+    """
+    Check if any previously errored members now have complete data
+    Returns members that should be processed from the error table
+    Automatically removes fixed members from error tracking table
+    """
+    try:
+        error_tracking_df = spark.table(ERROR_TRACKING_TABLE)
+        
+        print(f"Checking {error_tracking_df.count()} previously errored members for fixes...")
+        
+        # Join with new valid records to find fixed errors
+        # These are members who were in error but now have complete data
+        fixed_errors_df = error_tracking_df.drop("ValidationStatus", "ProcessingDate").join(
+            new_valid_df,
+            "MEMCODNUM",
+            "inner"
+        ).select(new_valid_df["*"])
+        
+        fixed_count = fixed_errors_df.count()
+        
+        # Remove fixed errors from error tracking table
+        if fixed_count > 0:
+            print(f"Found {fixed_count} previously errored members now fixed")
+            
+            # Keep only members still in error
+            remaining_errors_df = error_tracking_df.join(
+                fixed_errors_df.select("MEMCODNUM").distinct(),
+                "MEMCODNUM",
+                "left_anti"
+            )
+            
+            print(f"Updating error tracking table: {remaining_errors_df.count()} members still in error")
+            remaining_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+        else:
+            print("No previously errored members have been fixed")
+        
+        return fixed_errors_df
+        
+    except Exception as e:
+        print(f"Error tracking table not found or error in processing: {str(e)}")
+        # Return empty DataFrame with correct schema if table doesn't exist
+        return spark.createDataFrame([], new_valid_df.schema)
+
+# COMMAND ----------
+
+def main():
+    """
+    Main processing function
+    """
+    spark = SparkSession.builder.appName("SAR_NR_Processing").getOrCreate()
+    
+    # Setup Teradata connection
+    print("Setting up Teradata connection...")
+    td_config = setup_teradata_connection()
+    
+    # Determine if this is initial load or daily incremental
+    is_initial_load = input("Is this an initial load? (yes/no): ").strip().lower() == "yes"
+
+    is_sar_load = input("Is this an sar load? (yes/no): ").strip().lower() == "yes"
+    
+    print(f"Processing {'initial' if is_initial_load else 'incremental'} load...")
+    
+    # Get member data
+    print("Extracting member data...")
+    member_df = get_member_data(spark, td_config, is_initial_load, is_sar_load)
+    display(member_df)
+    
+    
+    # Validate and split records
+    print("Validating records...")
+    valid_df, error_df = validate_and_split_records(member_df)
+    sanitized_valid_df = sanitize_column_names(valid_df)
+    sanitized_error_df = sanitize_column_names(error_df)
+    print(f"Valid records: {sanitized_valid_df.count()}")
+    print(f"Error records: {sanitized_error_df.count()}")
+    
+    # For daily runs, check if any errored members are now fixed
+    if not is_initial_load:
+        print("Checking for fixed errors from previous runs...")
+        fixed_df = check_and_reprocess_errors(spark, sanitized_valid_df)
+        if fixed_df.count() > 0:
+            print(f"Found {fixed_df.count()} previously errored members now fixed")
+            sanitized_valid_df = sanitized_valid_df.union(fixed_df)
+    
+    # Track error records
+    print("Tracking error records...")
+    process_error_tracking(spark, sanitized_error_df, is_initial_load)
+    
+    # Generate vendor files
+    print("Generating vendor files...")
+    files_info = generate_vendor_files(sanitized_valid_df, error_df, OUTPUT_BASE_PATH)
+    
+    print(f"Generated {len(files_info)} files")
+    for file_info in files_info:
+        file_type = file_info.get('Type', 'VALID')
+        print(f"  - {file_info['FileName']}: {file_info['RecordCount']} records ({file_type})")
+    
+    # Generate summary report
+    print("Generating summary report...")
+    summary_file, summary_count = generate_summary_report(sanitized_valid_df, OUTPUT_BASE_PATH)
+    print(f"Summary report: {summary_file} with {summary_count} contract/PBP/segment combinations")
+    
+    # Track processed members
+    print("Tracking processed members...")
+    track_processed_members(spark, sanitized_valid_df, is_initial_load)
+    
+    # Generate reconciliation report (if vendor response files are available)
+    # print("Attempting to generate reconciliation report...")
+    # recon_file, missing_count = generate_reconciliation_report(
+    #     spark, 
+    #     MAIL_DATE_RESPONSE_PATH, 
+    #     OUTPUT_BASE_PATH
+    # )
+    # if recon_file:
+    #     print(f"Reconciliation report: {recon_file} with {missing_count} missing mail dates")
+    
+    print("Processing complete!")
+
+# COMMAND ----------
+
+if __name__ == "__main__":
+    main()
