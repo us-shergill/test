@@ -1,387 +1,1505 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as glob from 'glob';
-import * as os from 'os';
-import { readCsv } from './fileManager';
-const csv = require('csvtojson');
-const Exceljs = require('exceljs');
+# Databricks notebook source
+import getpass
+import teradatasql
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.window import Window
+from pyspark.sql.types import *
+from datetime import datetime, date
+import os
 
-// ---------- helpers to keep Excel happy ----------
-function getCellString(cell: any): string {
-  const v = cell?.value;
-  if (v == null) return "";
-  if (typeof v === "string" || typeof v === "number") return String(v);
-  if (typeof v === "object") {
-    if ("result" in v && v.result != null) return String((v as any).result);
-    if ("text" in v && (v as any).text != null) return String((v as any).text);
-    if ("richText" in v && Array.isArray((v as any).richText)) {
-      return (v as any).richText.map((t: any) => t.text ?? "").join("");
+# COMMAND ----------
+
+from pyspark.sql.types import StructType, StructField, StringType
+import io, csv
+
+csv_text = """Contract,PBP,Segment,State,ServiceAreaCountyName,ServiceAreaCountyCode
+H0439,003,001,GA,Butts ,11160
+H0439,003,001,GA,Greene,11520
+H0439,003,001,GA,Morgan,11771
+H0439,003,001,GA,Oconee,11800
+H0439,003,002,GA,Banks,11040
+H0439,003,002,GA,Chattooga,11240
+H0439,003,002,GA,Dawson,11350
+H0439,003,002,GA,Fayette,11451
+H0439,003,002,GA,White,11963
+H0439,006,000,GA,Cobb,11290
+H0439,006,000,GA,DeKalb,11370
+H0672,005,000,NM,San Juan,32220
+H2108,029,000,DE,Kent,08000
+H2108,042,001,DE,Kent,08000
+H4513,009,000,TX,Newton,45821
+H4513,033,000,TN,Lake,44470
+H4513,033,000,TN,Obion,44650
+H4513,036,000,TN,Bedford,44010
+H4513,036,000,TN,Grundy,44300
+H4513,036,000,TN,Haywood,44370
+H4513,039,000,AR,Crawford,04160
+H4513,046,001,AL,Lowndes,01420
+H4513,046,002,AL,Cherokee,01090
+H4513,046,002,AL,Colbert,01160
+H4513,046,002,AL,Lawrence,01390
+H4513,049,005,TN,Lake,44470
+H4513,049,005,TN,Obion,44650
+H4513,052,000,AR,Crawford,04160
+H4513,060,001,TX,Newton,45821
+H4513,061,001,TX,Newton,45821
+H4513,078,000,AR,Crawford,04160
+H4513,081,000,AR,Crawford,04160
+H4513,083,001,TX,Newton,45821
+H4513,085,000,IL,DeKalb,14170
+H4513,086,000,IL,DeKalb,14170
+H4513,088,000,AL,Tuscaloosa,01620
+H4513,091,000,TX,Newton,45821
+H7849,024,000,MO,Caldwell,26120
+H7849,102,003,AR,Crawford,04160
+H7849,124,001,DE,Kent,08000
+H7849,124,001,DE,New Castle,08010
+H7849,124,001,DE,Sussex,08020
+H9460,001,000,MO,Caldwell,26120
+"""
+
+
+# Parse CSV and trim each cell
+rows = list(csv.reader(io.StringIO(csv_text)))
+header = rows[0]
+data = [tuple(cell.strip() for cell in r) for r in rows[1:]]
+
+schema = StructType([StructField(col, StringType(), True) for col in header])
+sar_plan = spark.createDataFrame(data, schema)
+
+# optional: view/check
+sar_plan.printSchema()
+display(sar_plan)
+sar_plan.createOrReplaceTempView("SAR_PLAN")
+
+# COMMAND ----------
+
+
+csv_text = """YearNum,RecordType,Contract,PBP,Segment,State,LetterMaterialID,PLANReplacementID
+2025,MAPD,H0672,001,000,Colorado,H0672_25_1693729019_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,003,000,Colorado,H0672_25_1693731213_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,004,000,Colorado,H0672_25_1693732296_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,008,000,Colorado,H0672_25_1693735889_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,019,000,Colorado,H0672_25_1693738679_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,020,000,Colorado,H0672_25_1693740130_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,021,000,Colorado,H0672_25_1693741679_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,MAPD,H0672,022,000,Colorado,H0672_25_1693743193_C,2026_NR_SAR_OrgReplacement_H0672_Colorado
+2025,DSNP,H2108,039,000,Delaware,H2108_25_1693746062_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,DSNP,H2108,043,001,Delaware,H2108_25_1693748216_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,DSNP,H2108,043,002,Maryland,H2108_25_1693749954_C,2026_NR_SAR_OrgReplacement_H2108_Maryland
+2025,MA-Only  ,H3949,026,000,Pennsylvania,H3949_25_1693752214_C,2026_NR_SAR_OrgReplacement_H3949_Pennsylvania
+2025,MAPD,H3949,032,000,New Jersey,H3949_25_1693763324_C,2026_NR_SAR_OrgReplacement_H3949_New Jersey
+2025,MA-Only  ,H3949,051,000,New Jersey,H3949_25_1693767134_C,2026_NR_SAR_OrgReplacement_H3949_New Jersey
+2025,MAPD,H4407,028,000,Mississippi,H4407_25_1693777152_C,2026_NR_SAR_OrgReplacement_H4407
+2025,MAPD,H4513,059,000,Tennessee,H4513_25_1693779846_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,MAPD,H5410,027,000,Florida,H5410_25_1693782278_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,028,000,Florida,H5410_25_1693813772_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,029,000,Florida,H5410_25_1693815160_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,030,000,Florida,H5410_25_1693817368_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,037,000,Florida,H5410_25_1693818666_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,039,000,Florida,H5410_25_1693819890_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,040,000,Florida,H5410_25_1693821385_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,041,000,Florida,H5410_25_1693823733_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,043,000,Florida,H5410_25_1693824943_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,044,000,Florida,H5410_25_1693828852_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,048,000,Florida,H5410_25_1693830421_C,2026_NR_SAR_OrgReplacement_H5410
+2025,DSNP,H5410,049,000,Florida,H5410_25_1693832205_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,050,000,Florida,H5410_25_1693833337_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,051,000,Florida,H5410_25_1693836595_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,052,000,Florida,H5410_25_1693838228_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,053,000,Florida,H5410_25_1693840244_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H5410,054,000,Florida,H5410_25_1693842284_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MA-Only  ,H5410,057,000,Florida,H5410_25_1693850342_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MA-Only  ,H5410,058,000,Florida,H5410_25_1693852899_C,2026_NR_SAR_OrgReplacement_H5410
+2025,MAPD,H7389,001,000,Utah,H7389_25_1693862001_C,2026_NR_SAR_OrgReplacement_H7389_Utah
+2025,MAPD,H7389,002,000,Oregon,H7389_25_1693872426_C,2026_NR_SAR_OrgReplacement_H7389_Oregon
+2025,MAPD,H7389,002,000,Washington,H7389_25_1693872426a_C,2026_NR_SAR_OrgReplacement_H7389_Washington
+2025,MAPD,H7389,003,000,Missouri,H7389_25_1693874360_C,2026_NR_SAR_OrgReplacement_H7389_Missouri
+2025,MAPD,H7389,008,000,Nevada,H7389_25_1693882247_C,2026_NR_SAR_OrgReplacement_H7389_Nevada
+2025,DSNP,H7389,009,000,Missouri,H7389_25_1693884356_C,2026_NR_SAR_OrgReplacement_H7389_Missouri
+2025,DSNP,H7389,010,000,Missouri,H7389_25_1693886559_C,2026_NR_SAR_OrgReplacement_H7389_Missouri
+2025,MAPD,H7389,011,000,Washington  ,H7389_25_1693888505_C,2026_NR_SAR_OrgReplacement_H7389_Washington
+2025,MA-Only  ,H7787,002,000,Texas,H7787_25_1693891825_C,2026_NR_SAR_OrgReplacement_H7787
+2025,MAPD,H7849,001,000,Colorado,H7849_25_1693893809_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,006,000,Pennsylvania,H7849_25_1693895539_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,020,000,Georgia,H7849_25_1693897563_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,026,000,Colorado,H7849_25_1693899985_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,027,000,Colorado,H7849_25_1693901374_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,031,000,Pennsylvania,H7849_25_1693903563_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,033,000,New Jersey,H7849_25_1694067459_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,034,000,Tennessee,H7849_25_1694068374_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,034,000,Virginia,H7849_25_1694068374a_C,2026_NR_SAR_OrgReplacement_H7849_Virginia
+2025,MAPD,H7849,038,000,Texas,H7849_25_1694068901_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,039,000,Texas,H7849_25_1694069258_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,041,000,Texas,H7849_25_1694069542_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,042,000,Oklahoma ,H7849_25_1693889537_C,2026_NR_SAR_OrgReplacement_H7849_Oklahoma
+2025,MAPD,H7849,051,000,Colorado,H7849_25_1693900162_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,052,000,Connecticut,H7849_25_1693911459_C,2026_NR_SAR_OrgReplacement_H7849_Connecticut
+2025,MAPD,H7849,055,000,Oregon,H7849_25_1693915572_C,2026_NR_SAR_OrgReplacement_H7849_Oregon
+2025,MAPD,H7849,055,000,Washington,H7849_25_1693915572a_C,2026_NR_SAR_OrgReplacement_H7849_Washington 
+2025,MAPD,H7849,064,001,Alabama,H7849_25_1693934618_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,064,002,Alabama,H7849_25_1693943723_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,064,004,Mississippi,H7849_25_1693946430_C,2026_NR_SAR_OrgReplacement_H7849_Mississippi
+2025,MAPD,H7849,067,000,Georgia,H7849_25_1693952462_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,068,000,Alabama,H7849_25_1693965940_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,068,000,Georgia,H7849_25_1693965940a_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MA-Only  ,H7849,072,000,Kansas ,H7849_25_1693976311_C,2026_NR_SAR_OrgReplacement_H7849_Kansas
+,MA-Only  ,H7849,072,000,Missouri,H7849_25_1693976311_C,2026_NR_SAR_OrgReplacement_H7849_Missouri
+2025,MA-Only  ,H7849,073,000,Illinois,H7849_25_1693982497_C,2026_NR_SAR_OrgReplacement_H7849_Illinois
+2025,MA-Only  ,H7849,074,000,Illinois,H7849_25_1693982497_C,2026_NR_SAR_OrgReplacement_H7849_Illinois
+2025,MA-Only  ,H7849,074,000,Missouri,H7849_25_1693982497a_C,2026_NR_SAR_OrgReplacement_H7849_Missouri
+2025,MA-Only  ,H7849,078,000,Illinois,H7849_25_1693982831_C,2026_NR_SAR_OrgReplacement_H7849_Illinois
+2025,MAPD,H7849,082,000,New York,H7849_25_1693983259_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,083,000,New York,H7849_25_1693984882_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,084,000,New York,H7849_25_1693985347_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,085,000,New York,H7849_25_1693985984_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MA-Only  ,H7849,086,000,New York,H7849_25_1693986463_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,087,000,New York,H7849_25_1693987358_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MA-Only  ,H7849,089,000,Kentucky,H7849_25_1693990060_C,2026_NR_SAR_OrgReplacement_H7849_Kentucky
+2025,MA-Only  ,H7849,089,000,Ohio,H7849_25_1693990060a_C,2026_NR_SAR_OrgReplacement_H7849_Ohio
+2025,MAPD,H7849,103,000,Texas,H7849_25_1693991021_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,104,000,Pennsylvania,H7849_25_1693992424_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,105,000,Pennsylvania,H7849_25_1693994223_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,107,000,Pennsylvania,H7849_25_1693994999_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,108,000,Pennsylvania,H7849_25_1693995494_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,109,000,Pennsylvania,H7849_25_1693995923_C,2026_NR_SAR_OrgReplacement_H7849_Pennsylvania
+2025,MAPD,H7849,110,000,New York,H7849_25_1693996815_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,110,000,New Jersey,H7849_25_1693996815a_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,112,001,Alabama,H7849_25_1694060148_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,112,002,Alabama,H7849_25_1694060460_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,112,003,Alabama,H7849_25_1694060617_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,112,004,Alabama,H7849_25_1694060808_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,117,001,Georgia,H7849_25_1694061058_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,117,002,Georgia,H7849_25_1694061399_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+,MAPD,H7849,117,002,Alabama,H7849_25_1694061399a_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MAPD,H7849,118,000,Georgia,H7849_25_1694062126_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,119,000,Georgia,H7849_25_1694062267_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,120,000,Georgia,H7849_25_1694062838_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,121,000,Georgia,H7849_25_1694063323_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MA-Only  ,H7849,122,000,Alabama,H7849_25_1694064022_C,2026_NR_SAR_OrgReplacement_H7849_Alabama
+2025,MA-Only  ,H7849,122,000,Georgia,H7849_25_1694064022a_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,123,000,Delaware,H7849_25_1694064214_C,2026_NR_SAR_OrgReplacement_H7849_Delaware
+2025,MAPD,H7849,124,001,Delaware,H7849_25_1694064689_C,2026_NR_SAR_OrgReplacement_H7849_Delaware
+2025,MAPD,H7849,125,000,Delaware,H7849_25_1694066302_C,2026_NR_SAR_OrgReplacement_H7849_Delaware
+2025,MA-Only  ,H7849,126,000,Colorado,H7849_25_1694066969_C,2026_NR_SAR_OrgReplacement_H7849_Colorado
+2025,MAPD,H7849,127,000,New York,H7849_25_1694067212_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,128,000,New York,H7849_25_1693790778_C,2026_NR_SAR_OrgReplacement_H7849_New York
+2025,MAPD,H7849,129,000,New Jersey,H7849_25_1693796507_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,130,000,New Jersey,H7849_25_1693807886_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,131,000,New Jersey,H7849_25_1693811582_C,2026_NR_SAR_OrgReplacement_H7849_New Jersey
+2025,MAPD,H7849,133,001,Tennessee,H7849_25_1693813159_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,133,002,Georgia,H7849_25_1693814621_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,133,002,Tennessee,H7849_25_1693814621a_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,133,003,Tennessee,H7849_25_1693815270_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,133,004,Tennessee,H7849_25_1693816390_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,134,001,Texas,H7849_25_1693824789_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,134,002,Texas,H7849_25_1693827269_C,2026_NR_SAR_OrgReplacement_H7849_Texas
+2025,MAPD,H7849,137,001,Georgia  ,H7849_25_1693828044_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,137,002,Georgia  ,H7849_25_1693837476_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,137,003,Georgia  ,H7849_25_1693838761_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MAPD,H7849,137,004,Georgia  ,H7849_25_1693839780_C,2026_NR_SAR_OrgReplacement_H7849_Georgia
+2025,MA-Only  ,H7849,138,000,Utah,H7849_25_1693842858_C,2026_NR_SAR_OrgReplacement_H7849_Utah
+2025,MA-Only  ,H7849,139,000,Oregon,H7849_25_1693844303_C,2026_NR_SAR_OrgReplacement_H7849_Oregon
+2025,MA-Only  ,H7849,139,000,Washington,H7849_25_1693844303a_C,2026_NR_SAR_OrgReplacement_H7849_Washington
+2025,MAPD,H7849,140,001,Mississippi,H7849_25_1693845947_C,2026_NR_SAR_OrgReplacement_H7849_Mississippi
+2025,MAPD,H7849,140,001,Tennessee,H7849_25_1693845947a_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MAPD,H7849,140,002,Tennessee,H7849_25_1693847439_C,2026_NR_SAR_OrgReplacement_H7849_Tennessee
+2025,MA-Only  ,H7849,141,000,Oklahoma ,H7849_25_1693851989_C,2026_NR_SAR_OrgReplacement_H7849_Oklahoma
+2025,MAPD,H9725,008,000,Virginia,H9725_25_1693864598_C,2026_NR_SAR_OrgReplacement_H9725
+2025,MAPD,H0439,003,001,Georgia,H0439_25_1693865841_C,2026_NR_SAR_OrgReplacement_H0439
+2025,MAPD,H0439,003,002,Georgia,H0439_25_1693868697_C,2026_NR_SAR_OrgReplacement_H0439
+2025,MAPD,H0439,006,000,Georgia,H0439_25_1693870065_C,2026_NR_SAR_OrgReplacement_H0439
+2025,MAPD,H0672,005,000,New Mexico,H0672_25_1695285675_C,2026_NR_SAR_OrgReplacement_H0672_New Mexico
+2025,MAPD,H2108,029,000,Delaware,H2108_25_1695286598_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,MAPD,H2108,042,001,Delaware,H2108_25_1695286954_C,2026_NR_SAR_OrgReplacement_H2108_Delaware
+2025,MA-Only  ,H4513,009,000,Texas,H4513_25_1695287765_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MA-Only  ,H4513,033,000,Tennessee,H4513_25_1695288922_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,MAPD,H4513,036,000,Tennessee,H4513_25_1695289993_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,DSNP,H4513,039,000,Arkansas,H4513_25_1695291705_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,MAPD,H4513,046,001,Alabama,H4513_25_1695292508_C,2026_NR_SAR_OrgReplacement_H4513_Alabama
+2025,MAPD,H4513,046,002,Alabama,H4513_25_1695296631_C,2026_NR_SAR_OrgReplacement_H4513_Alabama
+2025,MAPD,H4513,049,005,Tennessee,H4513_25_1695297079_C,2026_NR_SAR_OrgReplacement_H4513_Tennessee
+2025,MAPD,H4513,052,000,Arkansas,H4513_25_1695299124_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,DSNP,H4513,060,001,Texas,H4513_25_1695301221_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MAPD,H4513,061,001,Texas,H4513_25_1695302034_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MA-Only  ,H4513,078,000,Arkansas,H4513_25_1695322388_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,DSNP,H4513,081,000,Arkansas,H4513_25_1695323222_C,2026_NR_SAR_OrgReplacement_H4513_Arkansas
+2025,MAPD,H4513,083,001,Texas,H4513_25_1695324897_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MAPD,H4513,085,000,Illinois,H4513_25_1695327762_C,2026_NR_SAR_OrgReplacement_H4513_Illinois
+2025,MAPD,H4513,086,000,Illinois,H4513_25_1695420954_C,2026_NR_SAR_OrgReplacement_H4513_Illinois
+2025,MAPD,H4513,088,000,Alabama,H4513_25_1695427293_C,2026_NR_SAR_OrgReplacement_H4513_Alabama
+2025,MAPD,H4513,091,000,Texas,H4513_25_1695428402_C,2026_NR_SAR_OrgReplacement_H4513_Texas
+2025,MAPD,H7849,024,000,Missouri,H7849_25_1695429694_C,2026_NR_SAR_OrgReplacement_H7849_Missouri
+2025,MAPD,H7849,102,003,Arkansas,H7849_25_1695430602_C,2026_NR_SAR_OrgReplacement_H7849_Arkansas
+2025,MAPD,H9460,001,000,Missouri,H9460_25_1695431463_C,2026_NR_SAR_OrgReplacement_H9460
+"""
+
+# parse & trim
+rows = list(csv.reader(io.StringIO(csv_text)))
+header = rows[0]
+data = []
+for r in rows[1:]:
+    cells = [c.strip() for c in r]
+    if len(cells) < 8:  # pad missing fields (e.g., blank YearNum rows)
+        cells += [''] * (8 - len(cells))
+    data.append(tuple(cells[:8]))
+
+schema = StructType([StructField(c, StringType(), True) for c in header])
+sar_nr_bom_2026 = spark.createDataFrame(data, schema)
+
+# optional:
+sar_nr_bom_2026.createOrReplaceTempView("SAR_NR_BOM_2026")
+display(sar_nr_bom_2026)
+
+# COMMAND ----------
+
+nr_csv_text = '''Contract,PBP,Segment,State
+H0672,"001","000",CO
+H0672,"003","000",CO
+H0672,"004","000",CO
+H0672,"008","000",CO
+H0672,"019","000",CO
+H0672,"020","000",CO
+H0672,"021","000",CO
+H0672,"022","000",CO
+H2108,"039","000",DE
+H2108,"043","001",DE
+H2108,"043","002",MD
+H3949,"026","000",PA
+H3949,"032","000",NJ
+H3949,"051","000",NJ
+H4407,"028","000",MS
+H4513,"059","000",TN
+H5410,"027","000",FL
+H5410,"028","000",FL
+H5410,"029","000",FL
+H5410,"030","000",FL
+H5410,"037","000",FL
+H5410,"039","000",FL
+H5410,"040","000",FL
+H5410,"041","000",FL
+H5410,"043","000",FL
+H5410,"044","000",FL
+H5410,"048","000",FL
+H5410,"049","000",FL
+H5410,"050","000",FL
+H5410,"051","000",FL
+H5410,"052","000",FL
+H5410,"053","000",FL
+H5410,"054","000",FL
+H5410,"057","000",FL
+H5410,"058","000",FL
+H7389,"001","000",UT
+H7389,"002","000",OR
+H7389,"002","000",WA
+H7389,"003","000",MO
+H7389,"008","000",NV
+H7389,"009","000",MO
+H7389,"010","000",MO
+H7389,"011","000",WA
+H7787,"002","000",TX
+H7849,"001","000",CO
+H7849,"006","000",PA
+H7849,"020","000",GA
+H7849,"026","000",CO
+H7849,"027","000",CO
+H7849,"033","000",NJ
+H7849,"034","000",TN
+H7849,"034","000",VA
+H7849,"038","000",TX
+H7849,"039","000",TX
+H7849,"041","000",TX
+H7849,"042","000",OK
+H7849,"051","000",CO
+H7849,"052","000",CT
+H7849,"055","000",OR
+H7849,"055","000",WA
+H7849,"064","001",AL
+H7849,"064","002",AL
+H7849,"064","004",MS
+H7849,"067","000",GA
+H7849,"068","000",AL
+H7849,"068","000",GA
+H7849,"072","000",KS
+H7849,"072","000",MO
+H7849,"073","000",IL
+H7849,"074","000",IL
+H7849,"074","000",MO
+H7849,"078","000",IL
+H7849,"082","000",NY
+H7849,"083","000",NY
+H7849,"084","000",NY
+H7849,"085","000",NY
+H7849,"086","000",NY
+H7849,"087","000",NY
+H7849,"089","000",KY
+H7849,"089","000",OH
+H7849,"103","000",TX
+H7849,"104","000",PA
+H7849,"105","000",PA
+H7849,"110","000",NJ
+H7849,"112","001",AL
+H7849,"112","002",AL
+H7849,"112","003",AL
+H7849,"112","004",AL
+H7849,"117","001",GA
+H7849,"117","002",AL
+H7849,"117","002",GA
+H7849,"118","000",GA
+H7849,"119","000",GA
+H7849,"120","000",GA
+H7849,"121","000",GA
+H7849,"122","000",AL
+H7849,"122","000",GA
+H7849,"123","000",DE
+H7849,"125","000",DE
+H7849,"126","000",CO
+H7849,"127","000",NY
+H7849,"128","000",NY
+H7849,"129","000",NJ
+H7849,"130","000",NJ
+H7849,"131","000",NJ
+H7849,"133","001",TN
+H7849,"133","002",GA
+H7849,"133","002",TN
+H7849,"133","003",TN
+H7849,"133","004",TN
+H7849,"134","001",TX
+H7849,"134","002",TX
+H7849,"137","001",GA
+H7849,"137","002",GA
+H7849,"137","003",GA
+H7849,"137","004",GA
+H7849,"138","000",UT
+H7849,"139","000",OR
+H7849,"139","000",WA
+H7849,"140","001",MS
+H7849,"140","001",TN
+H7849,"140","002",TN
+H7849,"141","000",OK
+H9725,"008","000",VA
+'''
+# Parse CSV and trim each cell
+rows = list(csv.reader(io.StringIO(nr_csv_text)))
+header = rows[0]
+data = [tuple(cell.strip() for cell in r) for r in rows[1:]]
+
+schema = StructType([StructField(col, StringType(), True) for col in header])
+nr_plan = spark.createDataFrame(data, schema)
+
+# optional: view/check
+nr_plan.printSchema()
+display(nr_plan)
+nr_plan.createOrReplaceTempView("NR_PLAN")
+
+# COMMAND ----------
+
+# NAS_OUTPUT_PATH = "\\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files\MailDateResponseFiles"
+CURRENT_YEAR = "2026"
+OUTPUT_BASE_PATH = "/Volumes/gedp_dev/volumes/sar_nr_output_files"
+MAIL_DATE_RESPONSE_PATH = f"{OUTPUT_BASE_PATH}/MailDateResponseFiles"
+
+# COMMAND ----------
+
+# Setup Teradata Connection
+def setup_teradata_connection():
+    """Setup Teradata connection with user credentials"""
+    username = input("Enter username (personal LAN ID or service account username): ").strip()
+    password = getpass.getpass("Enter password for username: ").strip()
+    tdv_host = "HSTNTDPROD.HEALTHSPRING.INSIDE"
+    
+    connection_config = {
+        "host": tdv_host,
+        "username": username,
+        "password": password,
+        "connection_string_read": f"jdbc:teradata://{tdv_host}/LOGMECH=LDAP,COLUMN_NAME=ON,TYPE=FASTEXPORT",
+        "driver": "com.teradata.jdbc.TeraDriver"
     }
-  }
-  return "";
-}
+    return connection_config
 
-function toNumberish(val: string | number, fallback = 0): number {
-  if (typeof val === "number") return Number.isFinite(val) ? val : fallback;
-  const cleaned = String(val).replace(/[^0-9.\-]/g, "");
-  if (cleaned === "") return fallback;
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : fallback;
-}
-// --------------------------------------------------
+def read_teradata_table(spark, config, query):
+    """Read data from Teradata using provided query"""
+    df = (spark.read
+        .format("jdbc")
+        .option('driver', config["driver"])
+        .option("url", config["connection_string_read"])
+        .option("query", query)
+        .option("user", config["username"])
+        .option("password", config["password"])
+        .load()
+    )
+    return df
 
-export async function combineAndExport(fullPathOut) {
-  const grps = await getFilePathGroups(fullPathOut);
-  let flatFilePath;
-  // for each zip grouping (ie for each zipcode) files are combined and written as one flat csv file per zip
-  for (const g of Object.keys(grps)) {
-    let flattenedZipDataObjects = await flattenFileGroup(grps[g]);
-    flatFilePath = await writeToFile(g, flattenedZipDataObjects);
-    let fileName = g;
-    let zip = fileName.split("_")[0];
-    await outputToExcel(fullPathOut, fileName, flatFilePath, zip, flattenedZipDataObjects);
-  }
-}
+# COMMAND ----------
 
-export function testHeaders(flattenedZipDataObjects) {
-  const lengths = flattenedZipDataObjects.map(obj => obj.length).flat();
-  const distinctLengths = new Set(lengths);
-  if (distinctLengths.size !== 1) {
-    throw 'Unexpected plans and pharmacy counts found. Some drugs may have missing drug costs for a plan or pharmacy.';
-  }
-  const distinctHeaders = new Set();
-  flattenedZipDataObjects.forEach(obj => distinctHeaders.add(obj.map(row => row[0]).join(',')));
-  if (distinctHeaders.size !== 1) {
-    throw 'Unexpected set of headers found. Some drugs may have missing drug costs for a plan or pharmacy.';
-  }
-}
+def get_member_data(spark, config, is_initial_load, is_sar_load):
+    if is_sar_load:
+        return get_sar_data(spark, config, is_initial_load)
+    else:
+        return get_nr_data(spark, config, is_initial_load)
 
-export async function writeToFile(fileName, flattenedZipDataObjects) {
-  const reportFile = path.join(__dirname, `../../../output/${fileName}_flat.csv`);
-  console.log(`Working on file: ${fileName}`);
-  try { fs.unlinkSync(reportFile); } catch (e) { }
 
-  // testHeaders(flattenedZipDataObjects)
+# COMMAND ----------
 
-  let header = `${flattenedZipDataObjects[0].map(row => row[0]).join(',')}\n`;
-  let lines = [header];
-  for (const line of flattenedZipDataObjects) {
-    let fullLine = line.map(row => {
-      // remove comma from subelement to prevent them from accidentally being used as a delimiter
-      return row[1].toString().replace(/,/g, '');
-    }).join(',');
-    lines.push(`${fullLine}\n`);
-  }
-  lines.forEach(ln => {
-    fs.appendFileSync(reportFile, ln);
-  });
-  return reportFile;
-}
+def get_sar_data(spark, config, is_initial_load=True):
+    """
+    Extract member data from Teradata and Databricks tables
+    For daily runs after initial load, only get new enrollments
+    EXACTLY MATCHING THE ORIGINAL SQL LOGIC
+    """
+    
+    # For incremental loads, we need to get all eligible members first,
+    # then filter out already processed ones using anti-join
+    
+    # EXACT SQL from requirements - extracting all Teradata data first
+    td_sar_sql_base = """
+            SELECT
+            MBR.MEMCODNUM --N/A
+            ,MBR.MemberID as "Member ID"
+            ,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+            ,MBR.TermDate as TermDate --N/A
+            ,MBRS.Description as CurrentStatus --N/A 
+            ,DMG.OECCounty --N/A
+            ,DMG.SCC1 as DMGSCC1 --N/A
+            ,DMG.SCC2 as DMGSCC2 --N/A
+            ,DMG.FirstName as FirstName
+            ,DMG.LastName as LastName
+            ,PhyADDR.Address1 as PhyAddr1 --N/A
+            ,PhyADDR.Address2 as PhyAddr2 --N/A
+            ,PhyADDR.City as PhyCity --N/A
+            ,PhyADDR.State as PhyState --N/A
+            ,CASE 
+            WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+            ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+            END as PhyZip --N/A
+            ,MailADDR.Address1 as MailAddr1
+            ,MailADDR.Address2 as MailAddr2
+            ,MailADDR.City as MailCity
+            ,MailADDR.State as MailState
+            ,CASE 
+            WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+            ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+            END as MailZip
+            ,MBR.PlanID as CContract
+            ,MBR.PBP as CPBP
+            ,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+            ,EAMSGMNT.Span_EffDate
+            ,EAMSGMNT.Span_TermDate
+            ,PLN.ProductName as "Plan Name"
+            ,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+            ,SPAN.SPANSCC --N/A 
+            ,DMG.SCC1 --N/A 
+            ,COALESCE(DMG."Language",'ENG') as LanguageText
+            ,CASE 
+                WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+                WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+                WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+                WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+                ELSE '' 
+                END AS "Alternate Format"
+            ,SC.CountyName as County
+            ,SC.State                     AS CountyState         --N/A
+            ,STREF.STATE_NAME             AS CountyStateName     -- used later 
 
-// each zipcode may have multiple seperate files, this function creates a dictionary that groups the filepaths of those sep files by zip to be iterated on later
-export async function getFilePathGroups(fullPathOut) {
-  let pattern = `${fullPathOut}/*.csv`;
-  const csvDataFiles = glob.sync(pattern);
+            FROM (
+      SELECT
+      MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+      FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+      WHERE SRC_DATA_KEY = '210'
+      and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
+ 
+      JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+      ON    MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY
+      AND MBR.MemCodNum = DMG.MemCodNum
+      --AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
+ 
+      JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+      ON MBR.MemberStatus = MBRS.Status
+      --AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation
+     
+      LEFT JOIN
+      (
+            Select
+                        tbe.PlanID,
+                        tbe.MemCodNum,
+                        tbe.HIC AS SpanMBINumber,
+                        tbe.SPANTYPE AS SpanType,
+                        tbe."Value" AS SpanValue,
+                        CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+                        CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+                        CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+                        CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+                        Tbt.DateCreated AS TR_CREATE_DATE,
+                        --SegmentId population preference: SEGC, SEGD, Transactions, Default000
+                        COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+                        SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                   FROM (
+                   --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                   select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                   (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                          a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                           ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c
+               LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                 ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                     ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                        ON tbt.MemCodNum = tbe.MemCodNum
+                                          AND tbt.PlanID = tbe.PlanID
+                                          AND tbt.PBPID = tbe."Value"
+                                          AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                          AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                          AND tbt.TransStatus IN (5)
+                                          WHERE tbe.SpanType = 'PBP'
+                                          QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                          ) EAMSGMNT
+                                                             
+      ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+      AND MBR.PlanID = EAMSGMNT.PlanID
+      AND MBR.PBP = EAMSGMNT.SpanValue
+ 
+      JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+      ON MBR.PlanID = PLN.PlanID
+      AND MBR.PBP = PLN.PBPID
+ 
+      LEFT JOIN (
+      SELECT
+      MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+      FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+      WHERE AddressUse = '1'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR
+      ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY
+      AND MBR.MemCodNum = PhyADDR.MemCodNum
+ 
+      LEFT JOIN (
+      SELECT
+      MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+      FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+      WHERE AddressUse = '2'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR
+      ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY
+      AND MBR.MemCodNum = MailADDR.MemCodNum
+     
+      LEFT JOIN (
+      select
+      memcodnum, "value" as SPANSCC 
+      FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+      WHERE spantype = 'SCC'
+      qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+      ON dmg.memcodnum = span.memcodnum     
+      LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+      ON SCCCode = SC.SCC_CODE
+      LEFT JOIN 
+      (
+        SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+       ON SC.State = STREF.STATE_ABBREVIATED_NAME
+        """
+        
+    # Read data from Teradata
+    print("Reading SAR data from Teradata...")
+    td_df = read_teradata_table(spark, config, td_sar_sql_base)
+    print("Display base TD SAR data")
+    # display(td_df)
+    print("Done Reading base SAR data from Teradata...")
+    # Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
+    ref_state_sql = "SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY"
+    ref_state_df = read_teradata_table(spark, config, ref_state_sql)
+    ref_state_df.createOrReplaceTempView("REF_STATE")
+    
+    
+    # For incremental loads, filter out already processed members
+    if not is_initial_load:
+        try:
+            # Read processed members table
+            processed_members_df = spark.table("core_refdata.sar_processed_members").select("MEMCODNUM").distinct()
+            
+            # Anti-join to get only new/unprocessed members
+            print(f"Filtering out already processed members...")
+            td_df = td_df.join(
+                processed_members_df,
+                td_df.MEMCODNUM == processed_members_df.MEMCODNUM,
+                "left_anti"
+            )
+            
+            # Also get members that might have plan changes (different Contract/PBP/Segment)
+            # This captures members who switched plans
+            processed_with_plan_df = spark.table("core_refdata.sar_processed_members").select(
+                "MEMCODNUM", "CContract", "CPBP", "CSegment"
+            ).distinct()
+            
+            # Get members with plan changes
+            plan_change_df = td_df.alias("new").join(
+                processed_with_plan_df.alias("old"),
+                (col("new.MEMCODNUM") == col("old.MEMCODNUM")) &
+                ((col("new.CContract") != col("old.CContract")) |
+                 (col("new.CPBP") != col("old.CPBP")) |
+                 (col("new.CSegment") != col("old.CSegment"))),
+                "inner"
+            ).select(col("new.*"))
+            
+            # Union new members and plan changes
+            td_df = td_df.union(plan_change_df).distinct()
+            
+            print(f"Found {td_df.count()} new/changed members to process")
+            
+        except Exception as e:
+            print(f"Processed members table not found, treating as initial load: {str(e)}")
+    
+    # Cache the DataFrame for multiple operations
+    td_df.createOrReplaceTempView("TD_BASE_PUSHDOWN")
+    print("Creating Base SAR TD Base View...")
 
-  let testStr;
-  let parts = [];
-  let groupGlobs = [];
-  csvDataFiles.forEach(nm => {
-    parts = path.basename(nm).split('_');
-    // if no indices provided, split on _ will give something like esrd.csv for parts[1], so replace the .csv part
-    testStr = `${parts[0]}`;
-    if (groupGlobs.indexOf(testStr) < 0) {
-      groupGlobs.push(testStr);
-    }
-  });
-  let groupedFiles: Record<string, string[]> = {};
-  groupGlobs.forEach(glb => {
-    pattern = `${fullPathOut}/${glb}*.csv`;
-    // sort and rank of the drug output
-    groupedFiles[glb] = glob.sync(pattern).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  });
+    sar_bom_join_sql = """
+    WITH SAR AS (
+    SELECT Contract, PBP, Segment, ServiceAreaCountyCode
+    FROM core_refdata.SAR_PLAN
+    ),
+    MBOM AS (
+    SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
+    FROM core_refdata.SAR_NR_BOM_2026
+    ),
+    MBOMNOST AS (
+    SELECT *
+    FROM (
+        SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
+        FROM core_refdata.SAR_NR_BOM_2026
+    ) x
+    WHERE rn = 1
+    ),
+    MBOMSTREF AS (   -- small state abbrev map for MBOMNOST.State -> abbrev (for PhysicalState fallback)
+    SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+    FROM REF_STATE
+    )
 
-  console.log("Grouped Files Detected:");
-  console.log(groupedFiles);
-  return groupedFiles;
-}
+    SELECT
+    TD.MEMCODNUM                            --N/A
+    ,TD.`Member ID`          AS `Member ID`
+    ,TD.LatestEffectiveDate  --N/A
+    ,TD.TermDate             --N/A
+    ,TD.CurrentStatus        --N/A
+    ,TD.OECCounty            --N/A
+    ,TD.DMGSCC1              --N/A
+    ,TD.DMGSCC2              --N/A
+    ,TD.FirstName            AS FirstName
+    ,TD.LastName             AS LastName
+    ,TD.PhyAddr1             AS PhyAddr1     --N/A
+    ,TD.PhyAddr2             AS PhyAddr2     --N/A
+    ,TD.PhyCity              AS PhyCity      --N/A
+    ,TD.PhyState             AS PhyState     --N/A
+    ,TD.PhyZip               AS PhyZip       --N/A
+    ,TD.MailAddr1            AS MailAddr1
+    ,TD.MailAddr2            AS MailAddr2
+    ,TD.MailCity             AS MailCity
+    ,TD.MailState            AS MailState
+    ,TD.MailZip              AS MailZip
+    ,TD.CContract            AS CContract
+    ,TD.CPBP                 AS CPBP
+    ,TD.CSegment             AS CSegment
+    ,TD.Span_EffDate
+    ,TD.Span_TermDate
+    ,TD.`Plan Name`          AS `Plan Name`
+    ,TD.SCCCode              AS SCCCode
+    ,TD.SPANSCC              --N/A
+    ,TD.SCC1                 --N/A
+    ,TD.LanguageText         AS LanguageText
+    ,TD.`Alternate Format`   AS `Alternate Format`
+    ,TD.County               AS County
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
+        ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
+    END AS PhysicalState
+    ,TD.CountyState          AS CountyState  --N/A
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
+        ELSE MBOMNOST.State
+    END AS `Plan State`
+    ,TD.`Member ID`||'_SAR_'||(date_format(current_date(),'yyyyMMdd')) AS `Record ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
+        ELSE MBOMNOST.RecordType
+    END AS `Record Type`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
+        ELSE MBOMNOST.LetterMaterialID
+    END AS `Material ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
+        ELSE MBOMNOST.PLANReplacementID
+    END AS `Plan Replacement ID`
 
-//this function takes the filegroup list for each zip and flattens the file data and combines them and adds some header information
-export async function flattenFileGroup(fileGroupList) {
-  let planIdMap = {};
-  let zipGroupSortedObjects = await combineAndSortFileGroupData(fileGroupList);
-  let flattenedZipData = flattenZipData(zipGroupSortedObjects, planIdMap);
-  return flattenedZipData;
-}
+    FROM TD_BASE_PUSHDOWN TD
 
-export async function combineAndSortFileGroupData(fileGroupList) {
-  let zipData: any[] = [];
-  for (const fileName of fileGroupList) {
-    let fileData = await readCsv(fileName);
-    zipData.push(...fileData);
-  }
-  // Sort by drugCategory, drugName, planId, mail order last
-  zipData.sort(function (a, b) {
-    let exceptions = ["Mail order pharmacy"], indexA, indexB;
-    indexA = exceptions.indexOf(a.source);
-    indexB = exceptions.indexOf(b.source);
-    let mail_order_calc = 0;
-    if (indexA === -1 && indexB === -1) {
-      mail_order_calc = a.source.toLowerCase().localeCompare(b.source.toLowerCase()); // regular case
-    } else {
-      mail_order_calc = indexA - indexB; // index will be -1 (doesn't occur), 0 or 1
-    }
-    return (
-      a.drugCategory.localeCompare(b.drugCategory) ||
-      a.brandGenericFlag.localeCompare(b.brandGenericFlag) ||
-      a.rank - b.rank ||
-      a.drugName.localeCompare(b.drugName) ||
-      a.planId.localeCompare(b.planId) ||
-      mail_order_calc
-    );
-  });
+    -- original SAR position in flow
+    JOIN SAR
+    ON TD.CContract = SAR.Contract
+    AND TD.CPBP     = SAR.PBP
+    AND TD.CSegment = SAR.Segment
+    AND TD.SCCCode  = SAR.ServiceAreaCountyCode
 
-  return zipData;
-}
+    -- SC and STREF were executed in pushdown; their fields are already on TD_*
 
-export function flattenZipData(zipData, planIdMap) {
-  let flattenedZipData: any[] = [];
-  zipData.forEach(priceObjct => {
-    let found = flattenedZipData.find(objct =>
-      objct[0][1] == priceObjct.rank &&
-      objct[1][1] == priceObjct.drugCategory &&
-      objct[2][1] == priceObjct.drugName &&
-      objct[3][1] == priceObjct.quantity
-    );
-    if (!!found) {
-      found.push([`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]);
-    } else {
-      var flattenedObj = [
-        [`Rank`, priceObjct.rank],
-        ['Drug Category', priceObjct.drugCategory],
-        ['Drug', priceObjct.drugName],
-        ['Quantity', priceObjct.quantity],
-        ['Refill Frequency', '30'],
-        ['Package Option', priceObjct.packageOption],
-        ['Brand or Generic', priceObjct.brandGenericFlag],
-        [`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`, priceObjct.cost]
-      ];
-      flattenedZipData.push(flattenedObj);
-    }
-    planIdMap[`${priceObjct.planId}_${priceObjct.planName}_${priceObjct.source}`] = priceObjct.planId;
-  });
-  return flattenedZipData;
-}
+    LEFT JOIN MBOM
+    ON TD.CContract = MBOM.Contract
+    AND TD.CPBP     = MBOM.PBP
+    AND TD.CSegment = MBOM.Segment
+    AND TD.CountyStateName = MBOM.State
 
-// this function takes a file and flattens the data (formatted to be put in csv format)
-export async function flattenFile(filePath, orderOfPlans, orderOfSources, orderOfPlanIDs) {
-  let currentDrug, currentCategory, currentRank, currentQty, currentRefillFreq, currentPackageOption, currentBorG;
-  let planSourceObject = [];
-  let planSourceObjects = [];
-  let lines = [];
-  await csv().fromFile(filePath).subscribe((lineData, rowNum) => {
-    if (lineData.drugName != currentDrug) {
-      if (rowNum > 0) {
-        // add the completed line to the list
-        lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`);
-      }
-      // reset loop state
-      planSourceObject = [];
-      planSourceObjects = [];
-      currentDrug = lineData.drugName;
-      currentRank = lineData.rank;
-      currentCategory = lineData.drugCategory;
-      currentQty = lineData.quantity;
-      currentPackageOption = lineData.packageOption;
-      currentBorG = lineData.brandGenericFlag;
-      currentRefillFreq = "30";
-    }
-    if (!orderOfPlans.includes(lineData.planName)) {
-      orderOfPlans.push(lineData.planName);
-    }
-    if (!orderOfSources.includes(lineData.source)) {
-      orderOfSources.push(lineData.source);
-    }
+    LEFT JOIN MBOMNOST
+    ON TD.CContract = MBOMNOST.Contract
+    AND TD.CPBP     = MBOMNOST.PBP
+    AND TD.CSegment = MBOMNOST.Segment
 
-    if (!orderOfPlanIDs.includes(lineData.planId)) {
-      orderOfPlanIDs.push(lineData.planId);
-    }
+    LEFT JOIN MBOMSTREF
+    ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+    """
+    result_df = spark.sql(sar_bom_join_sql)
+    return result_df
 
-    planSourceObject[orderOfSources.indexOf(lineData.source)] = lineData.cost;
-    planSourceObjects[orderOfPlans.indexOf(lineData.planName)] = planSourceObject.slice();
-  });
+# COMMAND ----------
 
-  // required for the last price line
-  lines.push(`${currentRank},${currentCategory},${currentDrug},${currentQty},${currentRefillFreq},${currentPackageOption},${currentBorG},${planSourceObjects.join()}\n`);
+def get_nr_data(spark, config, is_initial_load=True):
+    """
+    Extract member data from Teradata and Databricks tables
+    For daily runs after initial load, only get new enrollments
+    EXACTLY MATCHING THE ORIGINAL SQL LOGIC
+    """
+    
+    # For incremental loads, we need to get all eligible members first,
+    # then filter out already processed ones using anti-join
+    
+    # EXACT SQL from requirements - extracting all Teradata data first
+    td_nr_sql_base = """SELECT
+        MBR.MEMCODNUM --N/A
+        ,MBR.MemberID as "Member ID"
+        ,MBR.CurrentEffDate as LatestEffectiveDate --N/A 
+        ,MBR.TermDate as TermDate --N/A
+        ,MBRS.Description as CurrentStatus --N/A 
+        ,DMG.OECCounty --N/A
+        ,DMG.SCC1 as DMGSCC1 --N/A
+        ,DMG.SCC2 as DMGSCC2 --N/A
+        ,DMG.FirstName as FirstName
+        ,DMG.LastName as LastName
+        ,PhyADDR.Address1 as PhyAddr1 --N/A
+        ,PhyADDR.Address2 as PhyAddr2 --N/A
+        ,PhyADDR.City as PhyCity --N/A
+        ,PhyADDR.State as PhyState --N/A
+        ,CASE 
+        WHEN PhyADDR.ZipFour IS NULL THEN PhyADDR.Zip 
+        ELSE PhyADDR.Zip||'-'||PhyADDR.ZipFour 
+        END as PhyZip --N/A
+        ,MailADDR.Address1 as MailAddr1
+        ,MailADDR.Address2 as MailAddr2
+        ,MailADDR.City as MailCity
+        ,MailADDR.State as MailState
+        ,CASE 
+        WHEN MailADDR.ZipFour IS NULL THEN MailADDR.Zip 
+        ELSE MailADDR.Zip||'-'||MailADDR.ZipFour  
+        END as MailZip
+        ,MBR.PlanID as CContract
+        ,MBR.PBP as CPBP
+        ,COALESCE(EAMSGMNT.SegmentID,MBR.SegmentID,'000') as CSegment
+        ,EAMSGMNT.Span_EffDate
+        ,EAMSGMNT.Span_TermDate
+        ,PLN.ProductName as "Plan Name"
+        ,COALESCE(SPAN.SPANSCC,DMG.SCC1) as SCCCode
+        ,SPAN.SPANSCC --N/A
+        ,DMG.SCC1 --N/A
+        ,COALESCE(DMG."Language",'ENG') as LanguageText
+        ,CASE 
+            WHEN DMG.AccessibilityFormat = 1 THEN 'Braille'
+            WHEN DMG.AccessibilityFormat = 2 THEN 'Large Print'
+            WHEN DMG.AccessibilityFormat = 3 THEN 'Audio CD'
+            WHEN DMG.AccessibilityFormat = 4 THEN 'Data CD'
+            ELSE '' 
+            END AS "Alternate Format"
+        ,SC.CountyName as County
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN PhyADDR.State 
+            Else MBOMSTREF.STATE_ABBREVIATED_NAME 
+            END AS PhysicalState
+        ,SC.State as CountyState --N/A
+        --,NR.State as NRInclusionState
+        --,COALESCE(BOMWITHST.State,BOMNOST.State) as "Plan State"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.State,BOMNOST.State) 
+            Else BOMNOST.State 
+            END AS "Plan State"
+        ,MemberID||'_NR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
+        --,COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) as "Record Type"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) 
+            Else BOMNOST.RecordType 
+            END AS "Record Type"
+        --,COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) as "Material ID"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) 
+            Else BOMNOST.LetterMaterialID 
+            END AS "Material ID"
+        --,COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID) as "Plan Replacement ID"
+        ,CASE 
+            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID)  
+            Else BOMNOST.PLANReplacementID 
+            END AS "Plan Replacement ID"
 
-  return lines;
-}
+        FROM (
+            SELECT
+            MemberID, MemCodNum, PlanID, PBP, SegmentID, SRC_DATA_KEY, CurrentEffDate, TermDate, MemberStatus
+            FROM GBS_FACET_CORE_V.EAM_tbEENRLMembers
+            WHERE SRC_DATA_KEY = '210'
+            and cast(substr(TermDate,1,10) as date format 'YYYY-MM-DD') > current_date --To exclude termed members 
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY CurrentEffDate DESC) = 1) MBR
 
-export async function outputToExcel(fullPathOut, filename, flatFilePath, zipCode, flattenedZipDataObjects) {
-  let xlfileName = path.join(fullPathOut, `${filename}_xl_file.xlsx`);
+            JOIN GBS_FACET_CORE_V.EAM_tbMemberInfo DMG
+            ON 	MBR.SRC_DATA_KEY = DMG.SRC_DATA_KEY 
+            AND MBR.MemCodNum = DMG.MemCodNum
+            --AND MBR.PBP NOT LIKE '8%' --Exclude EGWP
 
-  //open a workbook
-  let workbook = new Exceljs.Workbook();
-  //add a sheet
-  let worksheet = workbook.addWorksheet("New Sheet");
+            JOIN GBS_FACET_CORE_V.EAM_tbMemberStatus MBRS
+            ON MBR.MemberStatus = MBRS.Status
+            --AND MBR.MemberStatus in ('1','2') --Awaiting business confirmation 
+            
+            LEFT JOIN 
+            (
+                Select 
+                        tbe.PlanID,
+                        tbe.MemCodNum,
+                        tbe.HIC AS SpanMBINumber,
+                        tbe.SPANTYPE AS SpanType,
+                        tbe."Value" AS SpanValue,
+                        CAST(tbe.STARTDATE AS DATE) AS Span_EffDate,
+                        CAST(tbe.ENDDATE AS DATE) AS Span_TermDate,
+                        CAST(tbe.LastModifiedDate AS DATE) AS LAST_MODIFIED,
+                        CAST(tbe.DateCreated AS DATE) AS CREATE_DATE,
+                        Tbt.DateCreated AS TR_CREATE_DATE,
+                        --SegmentId population preference: SEGC, SEGD, Transactions, Default000
+                        COALESCE(NULLIF(TRIM(tbe.SEGC_SegmentID), ''),NULLIF(TRIM(tbe.SEGD_SegmentID), ''),NULLIF(TRIM(tbt.SegmentID), ''), '000') AS SegmentID,
+                        SEGC_startDate,SEGC_EndDate,SEGD_startDate,SEGD_EndDate
+                        FROM (
+                        --Adding Value from SEGC,SEGD spans as SegmentID to PBP span
+                        select  d."Value" as SEGD_SegmentID,d.StartDate as SEGD_startDate, d.EndDate as SEGD_EndDate, c.* from
+                        (select  b."Value" as SEGC_SegmentID, b.StartDate as SEGC_startDate, b.EndDate as SEGC_EndDate,
+                                a.* from GBS_FACET_CORE_V.EAM_tbENRLSpans a LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans b
+                                ON a.MemCodNum = b.MemCodNum and a.PlanID = b.PlanID and (b.StartDate between  a.StartDate and a.EndDate) and a.SPANTYPE = 'PBP' and b.SPANTYPE='SEGC' ) c 
+                    LEFT JOIN GBS_FACET_CORE_V.EAM_tbENRLSpans d
+                                        ON c.MemCodNum = d.MemCodNum and c.PlanID = d.PlanID and ((SEGC_startDate is not null and c.SEGC_startDate = d.StartDate) or (SEGC_startDate is null and c.StartDate= d.StartDate)) and c.SPANTYPE = 'PBP' and d.SPANTYPE='SEGD'
+                            ) tbe  LEFT JOIN GBS_FACET_CORE_V.EAM_tbTransactions tbt
+                                                ON tbt.MemCodNum = tbe.MemCodNum
+                                                AND tbt.PlanID = tbe.PlanID
+                                                AND tbt.PBPID = tbe."Value"
+                                                AND (tbe.StartDate <= tbt.EffectiveDate AND tbe.EndDate >= tbt.EffectiveDate)
+                                                AND ((tbt.TransCode = '61') OR (tbt.TransCode IN ('80') AND tbt.ReplyCodes = '287'))
+                                                AND tbt.TransStatus IN (5)
+                                                WHERE tbe.SpanType = 'PBP'
+                                                QUALIFY ROW_NUMBER() OVER (PARTITION BY tbe.MemCodNum, tbe.PlanID, tbe."Value" ORDER BY Span_EffDate DESC, Span_TermDate desc) = 1
+                                                ) EAMSGMNT
+                                                
+            ON MBR.MEMCODNUM = EAMSGMNT.MEMCODNUM
+            AND MBR.PlanID = EAMSGMNT.PlanID
+            AND MBR.PBP = EAMSGMNT.SpanValue
 
-  // define columns from headers in first flattened object
-  worksheet.columns = flattenedZipDataObjects[0].map(row => ({ header: row[0], key: row[0] }));
+            JOIN GBS_FACET_CORE_V.EAM_tbPlan_PBP PLN
+            ON MBR.PlanID = PLN.PlanID
+            AND MBR.PBP = PLN.PBPID
 
-  // add 2 empty rows above header row
-  worksheet.spliceRows(1, 0, []);
-  worksheet.spliceRows(1, 0, []);
+            LEFT JOIN (
+            SELECT 
+            MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+            FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+            WHERE AddressUse = '1'
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) PhyADDR 
+            ON MBR.SRC_DATA_KEY = PhyADDR.SRC_DATA_KEY 
+            AND MBR.MemCodNum = PhyADDR.MemCodNum
 
-  // Insert all row data
-  const rows: any[] = [];
-  flattenedZipDataObjects.forEach(row => rows.push(row.map(data => data[1])));
-  worksheet.addRows(rows);
+            LEFT JOIN (
+            SELECT 
+            MemCodNum, Address1, Address2, City, State, Zip, ZipFour, SRC_DATA_KEY
+            FROM GBS_FACET_CORE_V.EAM_MemberManagerAddress
+            WHERE AddressUse = '2'
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY MemCodNum ORDER BY StartDate DESC) = 1) MailADDR 
+            ON MBR.SRC_DATA_KEY = MailADDR.SRC_DATA_KEY 
+            AND MBR.MemCodNum = MailADDR.MemCodNum
+            
+            LEFT JOIN (
+            select 
+            memcodnum, "value" as SPANSCC  
+            FROM GBS_FACET_CORE_V.EAM_tbENRLSpans
+            WHERE spantype = 'SCC'
+            qualify row_number() over (partition by memcodnum order by startdate desc)=1) span
+            ON dmg.memcodnum = span.memcodnum
 
-  // default styling
-  worksheet.properties.defaultColWidth = 10;
-  worksheet.properties.defaultCellWidth = 10;
-  worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
-  worksheet.getRow(2).alignment = { vertical: 'middle', horizontal: 'left' };
-  worksheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
-  worksheet.getRow(1).height = 35;
-  worksheet.getRow(2).height = 35;
-  worksheet.getRow(3).height = 35;
-  worksheet.getColumn(1).width = 8;
-  worksheet.getColumn(2).width = 16;
-  worksheet.getColumn(3).width = 35;
-  worksheet.getColumn(4).width = 9;
-  worksheet.getColumn(5).width = 16;
-  worksheet.getColumn(6).width = 16;
-  worksheet.getRow(1).font = { bold: true, size: 14 };
-  worksheet.getRow(2).font = { bold: true, size: 12 };
-  worksheet.getRow(3).font = { bold: true, size: 12 };
-  worksheet.getRow(1).border = {
-    top: { style: 'medium' },
-    left: { style: 'medium' },
-    bottom: { style: 'medium' },
-    right: { style: 'medium' }
-  };
-  worksheet.getRow(2).border = {
-    top: { style: 'medium' },
-    left: { style: 'medium' },
-    bottom: { style: 'medium' },
-    right: { style: 'medium' }
-  };
-  worksheet.getColumn(7).border = {
-    right: { style: 'medium' }
-  };
+            LEFT JOIN GBS_FACET_CORE_V.EAM_TB_EAM_SCC_STATES SC
+            ON SCCCode = SC.SCC_CODE
+            
+            LEFT JOIN 
+            (
+                SELECT distinct STATE_ABBREVIATED_NAME, STATE_NAME from REFDATA_CORE_V.STATE_COUNTY) STREF
+            ON PhyADDR.State = STREF.STATE_ABBREVIATED_NAME 
+    """
+        
+    # Read data from Teradata
+    print("Reading NR data from Teradata...")
+    td_df = read_teradata_table(spark, config, td_nr_sql_base)
+    print("Display base NR TD data")
+    # display(td_df)
+    print("Done Reading base NR data from Teradata...")
+    # Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
+    ref_state_sql = "SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY"
+    ref_state_df = read_teradata_table(spark, config, ref_state_sql)
+    ref_state_df.createOrReplaceTempView("REF_NR_STATE")
+    
+    
+    # For incremental loads, filter out already processed members
+    if not is_initial_load:
+        try:
+            # Read processed members table
+            processed_members_df = spark.table("core_refdata.nr_processed_members").select("MEMCODNUM").distinct()
+            
+            # Anti-join to get only new/unprocessed members
+            print(f"Filtering out already processed members...")
+            td_df = td_df.join(
+                processed_members_df,
+                td_df.MEMCODNUM == processed_members_df.MEMCODNUM,
+                "left_anti"
+            )
+            
+            # Also get members that might have plan changes (different Contract/PBP/Segment)
+            # This captures members who switched plans
+            processed_with_plan_df = spark.table("core_refdata.nr_processed_members").select(
+                "MEMCODNUM", "CContract", "CPBP", "CSegment"
+            ).distinct()
+            
+            # Get members with plan changes
+            plan_change_df = td_df.alias("new").join(
+                processed_with_plan_df.alias("old"),
+                (col("new.MEMCODNUM") == col("old.MEMCODNUM")) &
+                ((col("new.CContract") != col("old.CContract")) |
+                 (col("new.CPBP") != col("old.CPBP")) |
+                 (col("new.CSegment") != col("old.CSegment"))),
+                "inner"
+            ).select(col("new.*"))
+            
+            # Union new members and plan changes
+            td_df = td_df.union(plan_change_df).distinct()
+            
+            print(f"Found {td_df.count()} new/changed members to process")
+            
+        except Exception as e:
+            print(f"Processed members table not found, treating as initial load: {str(e)}")
+    
+    # Cache the DataFrame for multiple operations
+    td_df.createOrReplaceTempView("TD_NR_BASE_PUSHDOWN")
+    print("Creating Base TD Base View...")
 
-  // Merge cells Date
-  const zipAndDateCellRange = 'A1:G2';
-  worksheet.mergeCells(zipAndDateCellRange);
-  const today = new Date();
-  const dateString = `${today.getFullYear()}-${('0' + (today.getMonth() + 1)).slice(-2)}-${('0' + today.getDate()).slice(-2)}`;
-  worksheet.getCell('A2').value = `Zip Code: ${zipCode} \n Report Date: ${dateString}`;
+    nr_bom_join_sql = """
+    WITH NR AS (
+    SELECT Contract, PBP, Segment
+    FROM core_refdata.NR_PLAN group by 1,2,3
+    ),
+    MBOM AS (
+    SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
+    FROM core_refdata.SAR_NR_BOM_2026
+    ),
+    MBOMNOST AS (
+    SELECT *
+    FROM (
+        SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
+        FROM core_refdata.SAR_NR_BOM_2026
+    ) x
+    WHERE rn = 1
+    ),
+    MBOMSTREF AS (   -- small state abbrev map for MBOMNOST.State -> abbrev (for PhysicalState fallback)
+    SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME
+    FROM REF_NR_STATE
+    )
 
-  // Split planName, planId, and Pharmacy to their own cells
-  let firstPlanColumnNum = 7; // 1-based column index where plans start
-  const totalColumns = worksheet.columns.length;
+    SELECT
+    TD.MEMCODNUM                            --N/A
+    ,TD.`Member ID`          AS `Member ID`
+    ,TD.LatestEffectiveDate  --N/A
+    ,TD.TermDate             --N/A
+    ,TD.CurrentStatus        --N/A
+    ,TD.OECCounty            --N/A
+    ,TD.DMGSCC1              --N/A
+    ,TD.DMGSCC2              --N/A
+    ,TD.FirstName            AS FirstName
+    ,TD.LastName             AS LastName
+    ,TD.PhyAddr1             AS PhyAddr1     --N/A
+    ,TD.PhyAddr2             AS PhyAddr2     --N/A
+    ,TD.PhyCity              AS PhyCity      --N/A
+    ,TD.PhyState             AS PhyState     --N/A
+    ,TD.PhyZip               AS PhyZip       --N/A
+    ,TD.MailAddr1            AS MailAddr1
+    ,TD.MailAddr2            AS MailAddr2
+    ,TD.MailCity             AS MailCity
+    ,TD.MailState            AS MailState
+    ,TD.MailZip              AS MailZip
+    ,TD.CContract            AS CContract
+    ,TD.CPBP                 AS CPBP
+    ,TD.CSegment             AS CSegment
+    ,TD.Span_EffDate
+    ,TD.Span_TermDate
+    ,TD.`Plan Name`          AS `Plan Name`
+    ,TD.SCCCode              AS SCCCode
+    ,TD.SPANSCC              --N/A
+    ,TD.SCC1                 --N/A
+    ,TD.LanguageText         AS LanguageText
+    ,TD.`Alternate Format`   AS `Alternate Format`
+    ,TD.County               AS County
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.PhyState
+        ELSE MBOMSTREF.STATE_ABBREVIATED_NAME
+    END AS PhysicalState
+    ,TD.CountyState          AS CountyState  --N/A
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
+        ELSE MBOMNOST.State
+    END AS `Plan State`
+    ,TD.`Member ID`||'_NR_'||(date_format(current_date(),'yyyyMMdd')) AS `Record ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
+        ELSE MBOMNOST.RecordType
+    END AS `Record Type`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
+        ELSE MBOMNOST.LetterMaterialID
+    END AS `Material ID`
+    ,CASE
+        WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
+        ELSE MBOMNOST.PLANReplacementID
+    END AS `Plan Replacement ID`
 
-  for (let colIdx = firstPlanColumnNum; colIdx <= totalColumns; colIdx++) {
-    const thisColumn = worksheet.getColumn(colIdx);
-    const keyStr = String(thisColumn.key ?? thisColumn.header ?? "");
-    const splitColNm = keyStr.split('_');
-    const planId = splitColNm[0] ?? "";
-    const planName = splitColNm[1] ?? "";
-    const pharmacyName = splitColNm[2] ?? "";
+    FROM TD_NR_BASE_PUSHDOWN TD
 
-    worksheet.getCell(1, colIdx).value = `Plan Name: ${planName}`;
-    worksheet.getCell(2, colIdx).value = `Plan Id: ${planId}`;
-    worksheet.getCell(3, colIdx).value = pharmacyName;
+    -- original NR position in flow
+    JOIN NR
+    ON TD.CContract = NR.Contract
+    AND TD.CPBP     = NR.PBP
+    AND TD.CSegment = NR.Segment
 
-    worksheet.getCell(1, colIdx).alignment = { vertical: 'middle', horizontal: 'center' };
-    worksheet.getCell(2, colIdx).alignment = { vertical: 'middle', horizontal: 'center' };
-    worksheet.getCell(3, colIdx).alignment = { vertical: 'middle', horizontal: 'center' };
+    -- SC and STREF were executed in pushdown; their fields are already on TD_*
 
-    worksheet.getColumn(colIdx).width = 30; // set width on the column (not the cell)
-  }
+    LEFT JOIN MBOM
+    ON TD.CContract = MBOM.Contract
+    AND TD.CPBP     = MBOM.PBP
+    AND TD.CSegment = MBOM.Segment
+    AND TD.CountyStateName = MBOM.State
 
-  // Merge cells row 1 and row 2 for plans (group of pharmacies under each plan)
-  firstPlanColumnNum = 8;
-  let mergeSpan = 7;
-  let currentColumnNum = firstPlanColumnNum;
-  let lastColumnNumber = totalColumns;
-  while (currentColumnNum + mergeSpan <= lastColumnNumber) {
-    worksheet.mergeCells(1, currentColumnNum, 1, currentColumnNum + mergeSpan);
-    worksheet.mergeCells(2, currentColumnNum, 2, currentColumnNum + mergeSpan);
-    currentColumnNum = currentColumnNum + mergeSpan + 1; // next group start
-  }
+    LEFT JOIN MBOMNOST
+    ON TD.CContract = MBOMNOST.Contract
+    AND TD.CPBP     = MBOMNOST.PBP
+    AND TD.CSegment = MBOMNOST.Segment
 
-  // Frame out file and compute pharmacy grouping
-  const columnCount = worksheet.actualColumnCount;
-  const rowCount = worksheet.actualRowCount;
-  let mailOrderCol = 8;
+    LEFT JOIN MBOMSTREF
+    ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+    """
+    result_df = spark.sql(nr_bom_join_sql)
+    return result_df
 
-  // Find "Mail order pharmacy" (it's written into row 3 for each plan column)
-  for (let col = 8; col <= columnCount; col++) {
-    const cell = worksheet.getRow(3).getCell(col);
-    const cellText = getCellString(cell).slice(0, 100);
-    if (cellText === 'Mail order pharmacy') {
-      mailOrderCol = col - 7;
-      break;
-    }
-  }
-  console.log(`${mailOrderCol} Pharmacies Detected.`);
+# COMMAND ----------
 
-  let pharmacyCounter = 1;
+def validate_and_split_records(df):
+    """
+    Validate records and split into valid and error dataframes
+    EXACTLY matching the SAR Fallout and Exclusion SQL logic
+    """
+    # Add validation status column - EXACTLY as in the SAR Fallout SQL
+    df.createOrReplaceTempView("TD_VW")
+    fallout_exclusion_sql = """
+        select 
+        Case 
+        when PhysicalState != CountyState Then 'Valid, Physical Address State '||PhysicalState||', SCC State '||CountyState
+        when MailAddr1 is NULL Then 'Fallout, no mailing address'
+        when "Member ID" is NULL Then 'Fallout, no member ID'
+        when FirstName is NULL Then 'Fallout, no first name'
+        when LastName is NULL Then 'Fallout, no last name'
+        when MailCity is NULL Then 'Fallout, no mail address city'
+        when MailState is NULL Then 'Fallout, no mail address state'
+        when MailZip is NULL Then 'Fallout, no mail address zip'
+        When "Plan Name" is NULL Then 'Fallout, no plan name'
+        When PhyState is NULL Then 'Fallout, no physical address state'
+        when "Material ID" is NULL Then 'BOM, Missing Data'
+        when CurrentStatus = 'Not Enrolled' Then 'Do not report, not enrolled'
+        WHEN CurrentStatus = 'Pending' AND to_date(substring(LatestEffectiveDate,1,10), 'yyyy-MM-dd') < current_date() AND Span_EffDate IS NULL
+        THEN 'Do not report, member effective date is in the past, has no span and is considered canceled'
+        WHEN CurrentStatus = 'Pending' AND to_date(substring(LatestEffectiveDate,1,10), 'yyyy-MM-dd') >= current_date() AND Span_EffDate IS NULL
+        THEN 'Fallout, member status pending with effective date in future with no span'
+        when CurrentStatus = 'Pending' Then 'Valid, status pending and effectivedate in future with span'
+        when SCCCode is null then 'Fallout, no SCC'
+        Else 'Valid' end as ValidationStatus,
+        t.* from TD_VW t"""
+    
+    fallout_exclusion_df = spark.sql(fallout_exclusion_sql)
+    # Split into valid and error records
+    valid_df = fallout_exclusion_df.filter(
+        (col("ValidationStatus") == "Valid") | 
+        (col("ValidationStatus").startswith("Valid,"))
+    ).drop("ValidationStatus")
+    
+    error_df = fallout_exclusion_df.filter(
+        (col("ValidationStatus").startswith("Fallout")) | 
+        (col("ValidationStatus").startswith("BOM"))
+    )
+    return valid_df, error_df
 
-  // Compare retail pharmacies against mail order value and highlight 3x cases
-  for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-    for (let colNum = 8; colNum <= columnCount; ++colNum) {
-      if ((pharmacyCounter % mailOrderCol) == 0 && colNum !== 8) {
-        // Add style border
-        worksheet.getColumn(colNum).border = {
-          right: { style: 'medium' }
-        };
+# COMMAND ----------
 
-        // mail order value in this group
-        const mailCell = worksheet.getRow(rowNum).getCell(colNum);
-        const mailValue = toNumberish(getCellString(mailCell), 0);
+from pyspark.sql import DataFrame
 
-        // walk backward for each pharmacy in the group and compare
-        for (let retroNum = 1; retroNum < mailOrderCol; ++retroNum) {
-          const pharmCell = worksheet.getRow(rowNum).getCell(colNum - retroNum);
-          const pharmValue = toNumberish(getCellString(pharmCell), 0);
+def sanitize_column_names(df: DataFrame) -> DataFrame:
+    """
+    Replaces spaces in column names with underscores in a PySpark DataFrame.
+    
+    Args:
+        df (DataFrame): Input PySpark DataFrame.
+    
+    Returns:
+        DataFrame: DataFrame with sanitized column names.
+    """
+    sanitized_columns = [col.replace(" ", "") for col in df.columns]
+    return df.toDF(*sanitized_columns)
 
-          if (pharmValue >= (mailValue * 3)) {
-            pharmCell.fill = {
-              type: 'pattern',
-              pattern: 'solid',
-              fgColor: { argb: 'FFFB00' }
-            };
-          }
-        }
-      }
-      pharmacyCounter++;
-    }
-  }
+# COMMAND ----------
 
-  // Convert numeric-looking values to numbers with currency format — but never write NaN
-  for (let rowNum = 4; rowNum <= rowCount; ++rowNum) {
-    for (let colNum = 8; colNum <= columnCount; ++colNum) {
-      const cell = worksheet.getRow(rowNum).getCell(colNum);
-      const num = toNumberish(getCellString(cell), NaN);
-      if (Number.isFinite(num)) {
-        cell.value = num;
-        cell.numFmt = '"$"#,##0.00';
-      }
-      // else leave as-is (text/blank)
-    }
-  }
+def process_error_tracking(spark, error_df, ERROR_TRACKING_TABLE, is_initial_load=True):
+    """
+    Manage error tracking table
+    For daily runs, check if previously errored members now have complete data
+    Prevents duplicate error records by updating existing ones
+    """
+    
+    # Add processing timestamp
+    error_df = error_df.withColumn("ProcessingDate", current_timestamp())
+    
+    if is_initial_load:
+        # Create or replace error tracking table for initial load
+        print(f"Initial load: Creating error tracking table with {error_df.count()} error records")
+        error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+    else:
+        # For incremental loads, handle existing error table properly
+        try:
+            existing_errors_df = spark.table(ERROR_TRACKING_TABLE)
+            
+            # Remove any existing records for MEMCODNUMs that have new errors
+            # This prevents duplicates - we'll keep the latest error status
+            remaining_existing_errors = existing_errors_df.join(
+                error_df.select("MEMCODNUM").distinct(),
+                "MEMCODNUM",
+                "left_anti"  # Keep only records NOT in new error_df
+            )
+            
+            # Combine remaining existing errors with new errors
+            # This ensures we have the latest error status for each member
+            updated_errors_df = remaining_existing_errors.unionByName(error_df, allowMissingColumns=True)
+            
+            # Overwrite the error tracking table with updated data
+            print(f"Incremental load: Updating error tracking table")
+            print(f"  - Previous error count: {existing_errors_df.count()}")
+            print(f"  - New errors found: {error_df.count()}")
+            print(f"  - Updated total errors: {updated_errors_df.count()}")
+            
+            updated_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+            
+        except Exception as e:
+            # Table doesn't exist, create it
+            print(f"Error tracking table not found, creating new one: {str(e)}")
+            error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+    
+    return error_df
 
-  // final formatting on row 3
-  worksheet.getRow(3).border = {
-    top: { style: 'medium' },
-    left: { style: 'medium' },
-    bottom: { style: 'medium' },
-    right: { style: 'medium' }
-  };
+# COMMAND ----------
 
-  await workbook.xlsx.writeFile(xlfileName);
-  return xlfileName;
-}
+def generate_vendor_files(valid_df, error_df, output_path, valid_columns, is_sar_load=True):
+    """
+    Generate vendor files per Contract/PBP/Segment combination
+    Following business requirements 1.1 - 1.3
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Get unique combinations of Contract, PBP, and Segment
+    combinations = valid_df.select("CContract", "CPBP", "CSegment").distinct().collect()
+    
+    files_generated = []
+    
+    for row in combinations:
+        contract = row["CContract"]
+        pbp = row["CPBP"]
+        # Handle null/blank segment as per requirement 1.2.1.2
+        segment = row["CSegment"] if row["CSegment"] and row["CSegment"] != "" else "000"
+        
+        # Filter data for this combination
+        subset_df = valid_df.filter(
+            (col("CContract") == contract) & 
+            (col("CPBP") == pbp) & 
+            (col("CSegment") == segment)
+        )
+        
+        # Generate filename as per requirement 1.2.1
+        filename = f"{CURRENT_YEAR}{'SAR' if is_sar_load else 'NR'}_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}.csv"
+        file_path = f"{output_path}/{filename}"
+        
+        # Write to CSV with tab delimiter as per requirement 1.1.2
+        subset_df = subset_df.toDF(*valid_columns)
+        subset_df.toPandas().to_csv(file_path, index=False)
+        display(subset_df)
+        
+        files_generated.append({
+            "Contract": contract,
+            "PBP": pbp,
+            "Segment": segment,
+            "RecordCount": subset_df.count(),
+            "FileName": filename
+        })
+    
+    # Generate error files for each combination with errors (requirement 1.3.6)
+    if error_df.count() > 0:
+        error_combinations = error_df.select("CContract", "CPBP", "CSegment").distinct().collect()
+        
+        for row in error_combinations:
+            contract = row["CContract"] if row["CContract"] else "UNKNOWN"
+            pbp = row["CPBP"] if row["CPBP"] else "UNKNOWN"
+            segment = row["CSegment"] if row["CSegment"] and row["CSegment"] != "" else "000"
+            
+            # Filter error data for this combination
+            error_subset_df = error_df.filter(
+                ((col("CContract") == contract) | col("CContract").isNull()) & 
+                ((col("CPBP") == pbp) | col("CPBP").isNull()) & 
+                ((col("CSegment") == segment) | col("CSegment").isNull())
+            )
+            
+            # Generate error filename
+            error_filename = f"{CURRENT_YEAR}SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}_error.csv"
+            error_file_path = f"{output_path}/{error_filename}"
+            
+            # Write error file with validation status
+            error_subset_df.coalesce(1).write.mode("overwrite").option("delimiter", "\t").option("header", "true").csv(error_file_path)
+            
+            files_generated.append({
+                "Contract": contract,
+                "PBP": pbp,
+                "Segment": segment,
+                "RecordCount": error_subset_df.count(),
+                "FileName": error_filename,
+                "Type": "ERROR"
+            })
+    
+    return files_generated
+
+# COMMAND ----------
+
+def generate_summary_report(valid_df, output_path , is_sar_load=True):
+    """
+    Generate summary report with counts by Contract/PBP/Segment
+    Following business requirements 2.1 - 2.4
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Group by Contract, PBP, and Segment and count (requirement 2.3.1)
+    summary_df = valid_df.groupBy("CContract", "CPBP", "CSegment").agg(
+        count("*").alias("TotalCount")
+    ).withColumnRenamed("CContract", "New year Contract") \
+     .withColumnRenamed("CPBP", "New year PBP") \
+     .withColumnRenamed("CSegment", "New Year Segment") \
+     .withColumnRenamed("TotalCount", "Total count of membership")
+    
+    # Generate filename as per requirement 2.2.1
+    summary_filename = f"GBSF_MAPD_{'SAR' if is_sar_load else 'NR'}_Summary_{current_date_str}.csv"
+    summary_file_path = f"{output_path}/{summary_filename}"
+    
+    # Write summary report as CSV (requirement 2.1.1)
+    summary_df.toPandas().to_csv(summary_file_path, index=False)
+    display(summary_df)
+    
+    return summary_filename, summary_df.count()
+
+# COMMAND ----------
+
+def generate_reconciliation_report(spark, vendor_response_path, output_path):
+    """
+    Generate reconciliation report comparing vendor mail dates with outbound files
+    Following business requirements 3.1 - 3.3
+    """
+    current_date_str = datetime.now().strftime("%Y%m%d")
+    
+    try:
+        # Read vendor response files with mail dates
+        vendor_response_df = spark.read.option("delimiter", "\t").option("header", "true").csv(f"{vendor_response_path}/*.csv")
+        
+        # Read processed members table
+        processed_df = spark.table(PROCESSED_MEMBERS_TABLE)
+        
+        # Find members without mail dates (requirement 3.3.2)
+        missing_mail_date_df = processed_df.join(
+            vendor_response_df,
+            processed_df["Record ID"] == vendor_response_df["Record ID"],
+            "left_anti"
+        ).select("Member ID", "Record ID")
+        
+        # Generate reconciliation report filename as per requirement 3.2.1
+        recon_filename = f"GBSF_SAR_MissingMailDate_{current_date_str}.csv"
+        recon_file_path = f"{MAIL_DATE_RESPONSE_PATH}/{recon_filename}"
+        
+        # Write reconciliation report as CSV (requirement 3.1.1)
+        # missing_mail_date_df.coalesce(1).write.mode("overwrite").option("header", "true").csv(recon_file_path)
+        
+        return recon_filename, missing_mail_date_df.count()
+        
+    except Exception as e:
+        print(f"Reconciliation report generation skipped: {str(e)}")
+        return None, 0
+
+# COMMAND ----------
+
+def track_processed_members(spark, valid_df, PROCESSED_MEMBERS_TABLE, is_initial_load=True):
+    """
+    Track processed members for reconciliation and duplicate prevention
+    """
+    processed_df = valid_df.select(
+        "MEMCODNUM",
+        "MemberID",
+        "RecordID",
+        "CContract",
+        "CPBP",
+        "CSegment"
+    ).withColumn("ProcessedDate", current_timestamp())
+    
+    if is_initial_load:
+        processed_df.write.mode("overwrite").saveAsTable(PROCESSED_MEMBERS_TABLE)
+    else:
+        processed_df.write.mode("append").saveAsTable(PROCESSED_MEMBERS_TABLE)
+
+
+# COMMAND ----------
+
+def check_and_reprocess_errors(spark, new_valid_df):
+    """
+    Check if any previously errored members now have complete data
+    Returns members that should be processed from the error table
+    Automatically removes fixed members from error tracking table
+    """
+    try:
+        error_tracking_df = spark.table(ERROR_TRACKING_TABLE)
+        
+        print(f"Checking {error_tracking_df.count()} previously errored members for fixes...")
+        
+        # Join with new valid records to find fixed errors
+        # These are members who were in error but now have complete data
+        fixed_errors_df = error_tracking_df.drop("ValidationStatus", "ProcessingDate").join(
+            new_valid_df,
+            "MEMCODNUM",
+            "inner"
+        ).select(new_valid_df["*"])
+        
+        fixed_count = fixed_errors_df.count()
+        
+        # Remove fixed errors from error tracking table
+        if fixed_count > 0:
+            print(f"Found {fixed_count} previously errored members now fixed")
+            
+            # Keep only members still in error
+            remaining_errors_df = error_tracking_df.join(
+                fixed_errors_df.select("MEMCODNUM").distinct(),
+                "MEMCODNUM",
+                "left_anti"
+            )
+            
+            print(f"Updating error tracking table: {remaining_errors_df.count()} members still in error")
+            remaining_errors_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+        else:
+            print("No previously errored members have been fixed")
+        
+        return fixed_errors_df
+        
+    except Exception as e:
+        print(f"Error tracking table not found or error in processing: {str(e)}")
+        # Return empty DataFrame with correct schema if table doesn't exist
+        return spark.createDataFrame([], new_valid_df.schema)
+
+# COMMAND ----------
+
+def main():
+    """
+    Main processing function
+    """
+    spark = SparkSession.builder.appName("SAR_NR_Processing").getOrCreate()
+    
+    # Setup Teradata connection
+    print("Setting up Teradata connection...")
+    td_config = setup_teradata_connection()
+    
+    # Determine if this is initial load or daily incremental
+    is_initial_load = input("Is this an initial load? (yes/no): ").strip().lower() == "yes"
+
+    is_sar_load = input("Is this an sar load? (yes/no): ").strip().lower() == "yes"
+
+    ERROR_TRACKING_TABLE = None
+    PROCESSED_MEMBERS_TABLE = None
+    if is_sar_load:
+        ERROR_TRACKING_TABLE = "core_refdata.sar_error_tracking"
+        PROCESSED_MEMBERS_TABLE = "core_refdata.sar_processed_members"
+    else:
+        ERROR_TRACKING_TABLE = "core_refdata.nr_error_tracking"
+        PROCESSED_MEMBERS_TABLE = "core_refdata.nr_processed_members"
+    
+    print(f"Processing {'initial' if is_initial_load else 'incremental'} load...")
+    
+    # Get member data
+    print(f"Extracting {'sar' if is_sar_load else 'nr'} data...")
+    member_df = get_member_data(spark, td_config, is_initial_load, is_sar_load)
+    display(member_df)
+    
+    # Validate and split records
+    print("Validating records...")
+    valid_df, error_df = validate_and_split_records(member_df)
+    sanitized_valid_df = sanitize_column_names(valid_df)
+    sanitized_error_df = sanitize_column_names(error_df)
+    print(f"Valid records: {sanitized_valid_df.count()}")
+    print(f"Error records: {sanitized_error_df.count()}")
+    
+    # For daily runs, check if any errored members are now fixed
+    if not is_initial_load:
+        print("Checking for fixed errors from previous runs...")
+        fixed_df = check_and_reprocess_errors(spark, sanitized_valid_df, ERROR_TRACKING_TABLE)
+        if fixed_df.count() > 0:
+            print(f"Found {fixed_df.count()} previously errored members now fixed")
+            sanitized_valid_df = sanitized_valid_df.union(fixed_df)
+    
+    # Track error records
+    print("Tracking error records...")
+    process_error_tracking(spark, sanitized_error_df, ERROR_TRACKING_TABLE, is_initial_load)
+    
+    # Generate vendor files
+    print("Generating vendor files...")
+    files_info = generate_vendor_files(sanitized_valid_df, error_df, OUTPUT_BASE_PATH, valid_columns, is_sar_load)
+    
+    print(f"Generated {len(files_info)} files")
+    for file_info in files_info:
+        file_type = file_info.get('Type', 'VALID')
+        print(f"  - {file_info['FileName']}: {file_info['RecordCount']} records ({file_type})")
+    
+    # Generate summary report
+    print("Generating summary report...")
+    summary_file, summary_count = generate_summary_report(sanitized_valid_df, OUTPUT_BASE_PATH, is_sar_load)
+    print(f"Summary report: {summary_file} with {summary_count} contract/PBP/segment combinations")
+    
+    # Track processed members
+    print("Tracking processed members...")
+    track_processed_members(spark, sanitized_valid_df, PROCESSED_MEMBERS_TABLE, is_initial_load)
+    
+    # Generate reconciliation report (if vendor response files are available)
+    # print("Attempting to generate reconciliation report...")
+    # recon_file, missing_count = generate_reconciliation_report(
+    #     spark, 
+    #     MAIL_DATE_RESPONSE_PATH, 
+    #     OUTPUT_BASE_PATH
+    # )
+    # if recon_file:
+    #     print(f"Reconciliation report: {recon_file} with {missing_count} missing mail dates")
+    
+    print("Processing complete!")
+
+# COMMAND ----------
+
+if __name__ == "__main__":
+    main()
