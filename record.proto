@@ -70,7 +70,7 @@ sar_plan = spark.createDataFrame(data, schema)
 
 # optional: view/check
 sar_plan.printSchema()
-display(sar_plan)
+# display(sar_plan)
 sar_plan.createOrReplaceTempView("SAR_PLAN")
 
 # COMMAND ----------
@@ -390,15 +390,16 @@ nr_plan = spark.createDataFrame(data, schema)
 
 # optional: view/check
 nr_plan.printSchema()
-display(nr_plan)
+# display(nr_plan)
 nr_plan.createOrReplaceTempView("NR_PLAN")
 
 # COMMAND ----------
 
 # NAS_OUTPUT_PATH = "\\mdnas1.healthspring.inside\IS\ApplicationData\EXPORT\CardFile\SARS & NR\NextYear_Production_Files\MailDateResponseFiles"
 CURRENT_YEAR = "2026"
-OUTPUT_BASE_PATH = "/Volumes/gedp_dev/volumes/sar_nr_output_files"
+OUTPUT_BASE_PATH = "/Volumes/gedp_prod/volumes/sar_nr_output_files"
 MAIL_DATE_RESPONSE_PATH = f"{OUTPUT_BASE_PATH}/MailDateResponseFiles"
+env = spark.conf.get("spark.databricks.workspaceUrl").split('.cloud')[0].split('gedp-')[1]
 
 # COMMAND ----------
 
@@ -597,9 +598,12 @@ def get_sar_data(spark, config, is_initial_load=True):
         
     # Read data from Teradata
     print("Reading SAR data from Teradata...")
+    if env.lower() != "prod":
+        td_sar_sql_base = td_sar_sql_base.replace("_CORE_", "_CORE_QA_")
     td_df = read_teradata_table(spark, config, td_sar_sql_base)
     print("Display base TD SAR data")
-    # display(td_df)
+    display(td_df)
+    print(f"Count SAR data {td_df.count()}")
     print("Done Reading base SAR data from Teradata...")
     # Also load the small REF_STATE once for MBOMNOST -> abbrev mapping later (MBOMSTREF)
     ref_state_sql = "SELECT DISTINCT STATE_ABBREVIATED_NAME, STATE_NAME FROM REFDATA_CORE_V.STATE_COUNTY"
@@ -652,18 +656,21 @@ def get_sar_data(spark, config, is_initial_load=True):
     sar_bom_join_sql = """
     WITH SAR AS (
     SELECT Contract, PBP, Segment, ServiceAreaCountyCode
-    FROM core_refdata.SAR_PLAN
+    -- FROM core_refdata.SAR_PLAN
+    FROM SAR_PLAN
     ),
     MBOM AS (
     SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
-    FROM core_refdata.SAR_NR_BOM_2026
+    -- FROM core_refdata.SAR_NR_BOM_2026
+    FROM SAR_NR_BOM_2026
     ),
     MBOMNOST AS (
     SELECT *
     FROM (
         SELECT *,
             ROW_NUMBER() OVER (PARTITION BY Contract, PBP, Segment ORDER BY State) AS rn
-        FROM core_refdata.SAR_NR_BOM_2026
+        -- FROM core_refdata.SAR_NR_BOM_2026
+        FROM SAR_NR_BOM_2026
     ) x
     WHERE rn = 1
     ),
@@ -688,11 +695,11 @@ def get_sar_data(spark, config, is_initial_load=True):
     ,TD.PhyCity              AS PhyCity      --N/A
     ,TD.PhyState             AS PhyState     --N/A
     ,TD.PhyZip               AS PhyZip       --N/A
-    ,TD.MailAddr1            AS MailAddr1
-    ,TD.MailAddr2            AS MailAddr2
-    ,TD.MailCity             AS MailCity
-    ,TD.MailState            AS MailState
-    ,TD.MailZip              AS MailZip
+    ,TD.MailAddr1            AS Addr1
+    ,TD.MailAddr2            AS Addr2
+    ,TD.MailCity             AS City
+    ,TD.MailState            AS State
+    ,TD.MailZip              AS Zip
     ,TD.CContract            AS CContract
     ,TD.CPBP                 AS CPBP
     ,TD.CSegment             AS CSegment
@@ -702,7 +709,7 @@ def get_sar_data(spark, config, is_initial_load=True):
     ,TD.SCCCode              AS SCCCode
     ,TD.SPANSCC              --N/A
     ,TD.SCC1                 --N/A
-    ,TD.LanguageText         AS LanguageText
+    ,TD.LanguageText         AS Language
     ,TD.`Alternate Format`   AS `Alternate Format`
     ,TD.County               AS County
     ,CASE
@@ -727,7 +734,6 @@ def get_sar_data(spark, config, is_initial_load=True):
         WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
         ELSE MBOMNOST.PLANReplacementID
     END AS `Plan Replacement ID`
-
     FROM TD_BASE_PUSHDOWN TD
 
     -- original SAR position in flow
@@ -743,7 +749,7 @@ def get_sar_data(spark, config, is_initial_load=True):
     ON TD.CContract = MBOM.Contract
     AND TD.CPBP     = MBOM.PBP
     AND TD.CSegment = MBOM.Segment
-    AND TD.CountyStateName = MBOM.State
+    AND lower(TD.CountyStateName) = lower(MBOM.State)
 
     LEFT JOIN MBOMNOST
     ON TD.CContract = MBOMNOST.Contract
@@ -814,33 +820,9 @@ def get_nr_data(spark, config, is_initial_load=True):
             ELSE '' 
             END AS "Alternate Format"
         ,SC.CountyName as County
-        ,CASE 
-            WHEN PhyADDR.State = SC.State THEN PhyADDR.State 
-            Else MBOMSTREF.STATE_ABBREVIATED_NAME 
-            END AS PhysicalState
         ,SC.State as CountyState --N/A
-        --,NR.State as NRInclusionState
-        --,COALESCE(BOMWITHST.State,BOMNOST.State) as "Plan State"
-        ,CASE 
-            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.State,BOMNOST.State) 
-            Else BOMNOST.State 
-            END AS "Plan State"
         ,MemberID||'_NR_'||(CURRENT_DATE (FORMAT 'YYYYMMDD')) as "Record ID"
-        --,COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) as "Record Type"
-        ,CASE 
-            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) 
-            Else BOMNOST.RecordType 
-            END AS "Record Type"
-        --,COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) as "Material ID"
-        ,CASE 
-            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) 
-            Else BOMNOST.LetterMaterialID 
-            END AS "Material ID"
-        --,COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID) as "Plan Replacement ID"
-        ,CASE 
-            WHEN PhyADDR.State = SC.State THEN COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID)  
-            Else BOMNOST.PLANReplacementID 
-            END AS "Plan Replacement ID"
+        ,STREF.STATE_NAME             AS CountyStateName     -- used later 
 
         FROM (
             SELECT
@@ -996,11 +978,11 @@ def get_nr_data(spark, config, is_initial_load=True):
     SELECT Contract, PBP, Segment
     FROM core_refdata.NR_PLAN group by 1,2,3
     ),
-    MBOM AS (
+    BOMWITHST AS (
     SELECT Contract, PBP, Segment, State, RecordType, LetterMaterialID, PLANReplacementID
     FROM core_refdata.SAR_NR_BOM_2026
     ),
-    MBOMNOST AS (
+    BOMNOST AS (
     SELECT *
     FROM (
         SELECT *,
@@ -1030,11 +1012,11 @@ def get_nr_data(spark, config, is_initial_load=True):
     ,TD.PhyCity              AS PhyCity      --N/A
     ,TD.PhyState             AS PhyState     --N/A
     ,TD.PhyZip               AS PhyZip       --N/A
-    ,TD.MailAddr1            AS MailAddr1
-    ,TD.MailAddr2            AS MailAddr2
-    ,TD.MailCity             AS MailCity
-    ,TD.MailState            AS MailState
-    ,TD.MailZip              AS MailZip
+    ,TD.MailAddr1            AS Addr1
+    ,TD.MailAddr2            AS Addr2
+    ,TD.MailCity             AS City
+    ,TD.MailState            AS State
+    ,TD.MailZip              AS Zip
     ,TD.CContract            AS CContract
     ,TD.CPBP                 AS CPBP
     ,TD.CSegment             AS CSegment
@@ -1044,7 +1026,7 @@ def get_nr_data(spark, config, is_initial_load=True):
     ,TD.SCCCode              AS SCCCode
     ,TD.SPANSCC              --N/A
     ,TD.SCC1                 --N/A
-    ,TD.LanguageText         AS LanguageText
+    ,TD.LanguageText         AS Language
     ,TD.`Alternate Format`   AS `Alternate Format`
     ,TD.County               AS County
     ,CASE
@@ -1053,21 +1035,21 @@ def get_nr_data(spark, config, is_initial_load=True):
     END AS PhysicalState
     ,TD.CountyState          AS CountyState  --N/A
     ,CASE
-        WHEN TD.PhyState = TD.CountyState THEN TD.CountyStateName
-        ELSE MBOMNOST.State
+        WHEN TD.PhyState = TD.CountyState THEN COALESCE(BOMWITHST.State,BOMNOST.State)
+        ELSE BOMNOST.State
     END AS `Plan State`
     ,TD.`Member ID`||'_NR_'||(date_format(current_date(),'yyyyMMdd')) AS `Record ID`
     ,CASE
-        WHEN TD.PhyState = TD.CountyState THEN MBOM.RecordType
-        ELSE MBOMNOST.RecordType
+        WHEN TD.PhyState = TD.CountyState THEN COALESCE(BOMWITHST.RecordType,BOMNOST.RecordType) 
+        ELSE BOMNOST.RecordType
     END AS `Record Type`
     ,CASE
-        WHEN TD.PhyState = TD.CountyState THEN MBOM.LetterMaterialID
-        ELSE MBOMNOST.LetterMaterialID
+        WHEN TD.PhyState = TD.CountyState THEN COALESCE(BOMWITHST.LetterMaterialID,BOMNOST.LetterMaterialID) 
+        ELSE BOMNOST.LetterMaterialID
     END AS `Material ID`
     ,CASE
-        WHEN TD.PhyState = TD.CountyState THEN MBOM.PLANReplacementID
-        ELSE MBOMNOST.PLANReplacementID
+        WHEN TD.PhyState = TD.CountyState THEN COALESCE(BOMWITHST.PLANReplacementID,BOMNOST.PLANReplacementID)
+        ELSE BOMNOST.PLANReplacementID
     END AS `Plan Replacement ID`
 
     FROM TD_NR_BASE_PUSHDOWN TD
@@ -1080,19 +1062,19 @@ def get_nr_data(spark, config, is_initial_load=True):
 
     -- SC and STREF were executed in pushdown; their fields are already on TD_*
 
-    LEFT JOIN MBOM
-    ON TD.CContract = MBOM.Contract
-    AND TD.CPBP     = MBOM.PBP
-    AND TD.CSegment = MBOM.Segment
-    AND TD.CountyStateName = MBOM.State
+    LEFT JOIN BOMWITHST
+    ON TD.CContract = BOMWITHST.Contract
+    AND TD.CPBP     = BOMWITHST.PBP
+    AND TD.CSegment = BOMWITHST.Segment
+    AND LOWER(TD.CountyStateName) = LOWER(BOMWITHST.State)
 
-    LEFT JOIN MBOMNOST
-    ON TD.CContract = MBOMNOST.Contract
-    AND TD.CPBP     = MBOMNOST.PBP
-    AND TD.CSegment = MBOMNOST.Segment
+    LEFT JOIN BOMNOST
+    ON TD.CContract = BOMNOST.Contract
+    AND TD.CPBP     = BOMNOST.PBP
+    AND TD.CSegment = BOMNOST.Segment
 
     LEFT JOIN MBOMSTREF
-    ON MBOMNOST.State = MBOMSTREF.STATE_NAME
+    ON BOMNOST.State = MBOMSTREF.STATE_NAME
     """
     result_df = spark.sql(nr_bom_join_sql)
     return result_df
@@ -1110,13 +1092,13 @@ def validate_and_split_records(df):
         select 
         Case 
         when PhysicalState != CountyState Then 'Valid, Physical Address State '||PhysicalState||', SCC State '||CountyState
-        when MailAddr1 is NULL Then 'Fallout, no mailing address'
+        when Addr1 is NULL Then 'Fallout, no mailing address'
         when "Member ID" is NULL Then 'Fallout, no member ID'
         when FirstName is NULL Then 'Fallout, no first name'
         when LastName is NULL Then 'Fallout, no last name'
-        when MailCity is NULL Then 'Fallout, no mail address city'
-        when MailState is NULL Then 'Fallout, no mail address state'
-        when MailZip is NULL Then 'Fallout, no mail address zip'
+        when City is NULL Then 'Fallout, no mail address city'
+        when State is NULL Then 'Fallout, no mail address state'
+        when Zip is NULL Then 'Fallout, no mail address zip'
         When "Plan Name" is NULL Then 'Fallout, no plan name'
         When PhyState is NULL Then 'Fallout, no physical address state'
         when "Material ID" is NULL Then 'BOM, Missing Data'
@@ -1204,13 +1186,13 @@ def process_error_tracking(spark, error_df, ERROR_TRACKING_TABLE, is_initial_loa
         except Exception as e:
             # Table doesn't exist, create it
             print(f"Error tracking table not found, creating new one: {str(e)}")
-            error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
+            # error_df.write.mode("overwrite").saveAsTable(ERROR_TRACKING_TABLE)
     
     return error_df
 
 # COMMAND ----------
 
-def generate_vendor_files(valid_df, error_df, output_path, valid_columns, is_sar_load=True):
+def generate_vendor_files(valid_df, error_df, output_path, is_sar_load=True):
     """
     Generate vendor files per Contract/PBP/Segment combination
     Following business requirements 1.1 - 1.3
@@ -1238,11 +1220,11 @@ def generate_vendor_files(valid_df, error_df, output_path, valid_columns, is_sar
         # Generate filename as per requirement 1.2.1
         filename = f"{CURRENT_YEAR}{'SAR' if is_sar_load else 'NR'}_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}.csv"
         file_path = f"{output_path}/{filename}"
+        print(filename)
         
         # Write to CSV with tab delimiter as per requirement 1.1.2
-        subset_df = subset_df.toDF(*valid_columns)
         subset_df.toPandas().to_csv(file_path, index=False)
-        display(subset_df)
+        # display(subset_df)
         
         files_generated.append({
             "Contract": contract,
@@ -1269,11 +1251,14 @@ def generate_vendor_files(valid_df, error_df, output_path, valid_columns, is_sar
             )
             
             # Generate error filename
-            error_filename = f"{CURRENT_YEAR}SAR_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}_error.csv"
+            error_filename = f"{CURRENT_YEAR}{'SAR' if is_sar_load else 'NR'}_Mailing_Fulfillment_{contract}_{pbp}_{segment}_{current_date_str}_error.csv"
             error_file_path = f"{output_path}/{error_filename}"
+            print(error_filename)
             
             # Write error file with validation status
-            error_subset_df.coalesce(1).write.mode("overwrite").option("delimiter", "\t").option("header", "true").csv(error_file_path)
+            # error_subset_df.coalesce(1).write.mode("overwrite").option("delimiter", "\t").option("header", "true").csv(error_file_path)
+            error_subset_df.toPandas().to_csv(error_file_path, index=False)
+            # display(error_subset_df)
             
             files_generated.append({
                 "Contract": contract,
@@ -1288,29 +1273,49 @@ def generate_vendor_files(valid_df, error_df, output_path, valid_columns, is_sar
 
 # COMMAND ----------
 
-def generate_summary_report(valid_df, output_path , is_sar_load=True):
+def generate_summary_report(spark, valid_df, output_path, is_sar_load=True):
     """
-    Generate summary report with counts by Contract/PBP/Segment
-    Following business requirements 2.1 - 2.4
+    Generate a summary with ALL plans from the SAR/NR universe,
+    including those with 0 members (count = 0).
     """
     current_date_str = datetime.now().strftime("%Y%m%d")
-    
-    # Group by Contract, PBP, and Segment and count (requirement 2.3.1)
-    summary_df = valid_df.groupBy("CContract", "CPBP", "CSegment").agg(
-        count("*").alias("TotalCount")
-    ).withColumnRenamed("CContract", "New year Contract") \
-     .withColumnRenamed("CPBP", "New year PBP") \
-     .withColumnRenamed("CSegment", "New Year Segment") \
-     .withColumnRenamed("TotalCount", "Total count of membership")
-    
-    # Generate filename as per requirement 2.2.1
+
+    # 1) Build the plan universe (distinct Contract/PBP/Segment) for this load type
+    if is_sar_load:
+        plan_universe = spark.sql("SELECT DISTINCT Contract, PBP, Segment FROM SAR_PLAN")
+    else:
+        plan_universe = spark.sql("SELECT DISTINCT Contract, PBP, Segment FROM NR_PLAN")
+
+    # 2) Counts from valid_df (these columns exist after sanitize_column_names)
+    counts_df = (
+        valid_df.groupBy("CContract", "CPBP", "CSegment")
+                .agg(count("*").alias("TotalCount"))
+    )
+
+    # 3) Left join universe to counts, ensuring missing counts -> 0
+    #    Join on aligned column names (Contract->CContract, etc.)
+    summary_df = (
+        plan_universe
+        .select(
+            col("Contract").alias("CContract"),
+            col("PBP").alias("CPBP"),
+            col("Segment").alias("CSegment"),
+        )
+        .join(counts_df, on=["CContract", "CPBP", "CSegment"], how="left")
+        .fillna({"TotalCount": 0})
+        .withColumnRenamed("CContract", "New year Contract")
+        .withColumnRenamed("CPBP", "New year PBP")
+        .withColumnRenamed("CSegment", "New Year Segment")
+        .withColumnRenamed("TotalCount", "Total count of membership")
+        .orderBy("New year Contract", "New year PBP", "New Year Segment")
+    )
+
+    # 4) Write CSV
     summary_filename = f"GBSF_MAPD_{'SAR' if is_sar_load else 'NR'}_Summary_{current_date_str}.csv"
     summary_file_path = f"{output_path}/{summary_filename}"
-    
-    # Write summary report as CSV (requirement 2.1.1)
     summary_df.toPandas().to_csv(summary_file_path, index=False)
     display(summary_df)
-    
+
     return summary_filename, summary_df.count()
 
 # COMMAND ----------
@@ -1447,11 +1452,13 @@ def main():
     # Get member data
     print(f"Extracting {'sar' if is_sar_load else 'nr'} data...")
     member_df = get_member_data(spark, td_config, is_initial_load, is_sar_load)
+    print(f"count member data {member_df.count()}")
     display(member_df)
     
     # Validate and split records
     print("Validating records...")
     valid_df, error_df = validate_and_split_records(member_df)
+
     sanitized_valid_df = sanitize_column_names(valid_df)
     sanitized_error_df = sanitize_column_names(error_df)
     print(f"Valid records: {sanitized_valid_df.count()}")
@@ -1471,7 +1478,11 @@ def main():
     
     # Generate vendor files
     print("Generating vendor files...")
-    files_info = generate_vendor_files(sanitized_valid_df, error_df, OUTPUT_BASE_PATH, valid_columns, is_sar_load)
+
+    fields = ["Member ID","FirstName","LastName","Addr1","Addr2","City","State","Zip","CContract","CPBP","CSegment","Plan Name","SCCCode","Language","Alternate Format","County","PhysicalState","Plan State","Record ID","Record Type","Material ID","Plan Replacement ID"]
+    final_df = valid_df.select(*fields)
+    final_error_df = error_df.select(*fields)
+    files_info = generate_vendor_files(final_df, final_error_df, OUTPUT_BASE_PATH, is_sar_load)
     
     print(f"Generated {len(files_info)} files")
     for file_info in files_info:
@@ -1480,22 +1491,23 @@ def main():
     
     # Generate summary report
     print("Generating summary report...")
+    
     summary_file, summary_count = generate_summary_report(sanitized_valid_df, OUTPUT_BASE_PATH, is_sar_load)
     print(f"Summary report: {summary_file} with {summary_count} contract/PBP/segment combinations")
     
     # Track processed members
-    print("Tracking processed members...")
+    # print("Tracking processed members...")
     track_processed_members(spark, sanitized_valid_df, PROCESSED_MEMBERS_TABLE, is_initial_load)
     
-    # Generate reconciliation report (if vendor response files are available)
-    # print("Attempting to generate reconciliation report...")
-    # recon_file, missing_count = generate_reconciliation_report(
-    #     spark, 
-    #     MAIL_DATE_RESPONSE_PATH, 
-    #     OUTPUT_BASE_PATH
-    # )
-    # if recon_file:
-    #     print(f"Reconciliation report: {recon_file} with {missing_count} missing mail dates")
+    # # Generate reconciliation report (if vendor response files are available)
+    # # print("Attempting to generate reconciliation report...")
+    # # recon_file, missing_count = generate_reconciliation_report(
+    # #     spark, 
+    # #     MAIL_DATE_RESPONSE_PATH, 
+    # #     OUTPUT_BASE_PATH
+    # # )
+    # # if recon_file:
+    # #     print(f"Reconciliation report: {recon_file} with {missing_count} missing mail dates")
     
     print("Processing complete!")
 
